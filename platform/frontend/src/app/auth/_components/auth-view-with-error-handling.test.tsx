@@ -62,6 +62,7 @@ describe("AuthViewWithErrorHandling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSignInMutateAsync.mockResolvedValue({
+      success: true,
       requiresDefaultPasswordChange: false,
       redirectUrl: "/",
     });
@@ -150,6 +151,7 @@ describe("AuthViewWithErrorHandling", () => {
   it("prompts for a new password after default admin sign-in", async () => {
     mockSearchParams.get.mockReturnValue(null);
     mockSignInMutateAsync.mockResolvedValue({
+      success: true,
       requiresDefaultPasswordChange: true,
       redirectUrl: "/chat",
     });
@@ -169,7 +171,7 @@ describe("AuthViewWithErrorHandling", () => {
     });
     expect(screen.getByLabelText("New password")).toBeInTheDocument();
     expect(screen.getByLabelText("Confirm password")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Skip" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("New password"), {
       target: { value: "new-admin-password" },
@@ -193,5 +195,66 @@ describe("AuthViewWithErrorHandling", () => {
         revokeOtherSessions: true,
       });
     });
+  });
+
+  it("returns to sign-in when backing out of the default password prompt", async () => {
+    mockSearchParams.get.mockReturnValue(null);
+    mockSignInMutateAsync.mockResolvedValue({
+      success: true,
+      requiresDefaultPasswordChange: true,
+      redirectUrl: "/chat",
+    });
+
+    render(<AuthViewWithErrorHandling path="sign-in" callbackURL="/chat" />);
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "admin@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Change Password")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Enter your email below to login to your account"),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Email")).toHaveValue("admin@example.com");
+    expect(screen.getByLabelText("Password")).toHaveValue("");
+    expect(screen.queryByText("Change Password")).not.toBeInTheDocument();
+  });
+
+  it("shows a forgot-password link for invalid credentials", async () => {
+    mockSearchParams.get.mockReturnValue(null);
+    mockSignInMutateAsync.mockResolvedValue({
+      success: false,
+      showForgotPassword: true,
+    });
+
+    render(<AuthViewWithErrorHandling path="sign-in" callbackURL="/chat" />);
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "me@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "wrong-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("link", { name: "Forgot password?" }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("link", { name: "Forgot password?" }),
+    ).toHaveAttribute("href", "/auth/forgot-password");
   });
 });

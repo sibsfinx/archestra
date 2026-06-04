@@ -85,10 +85,33 @@ describe("useChangeAccountPasswordMutation", () => {
         callbackURL: "/chat",
       }),
     ).resolves.toEqual({
+      success: true,
       requiresDefaultPasswordChange: true,
       redirectUrl: "/chat",
     });
     expect(archestraApiSdk.getDefaultCredentialsStatus).toHaveBeenCalled();
+  });
+
+  it("returns forgot-password metadata for invalid sign-in credentials", async () => {
+    vi.mocked(authClient.signIn.email).mockResolvedValue({
+      data: null,
+      error: { message: "Invalid email or password" },
+    } as Awaited<ReturnType<typeof authClient.signIn.email>>);
+
+    const { result } = renderHook(() => useSignInWithEmailMutation(), {
+      wrapper: createWrapper(),
+    });
+
+    await expect(
+      result.current.mutateAsync({
+        email: "me@example.com",
+        password: "wrong-password",
+      }),
+    ).resolves.toEqual({
+      success: false,
+      showForgotPassword: true,
+    });
+    expect(toast.error).toHaveBeenCalledWith("Invalid email or password");
   });
 });
 

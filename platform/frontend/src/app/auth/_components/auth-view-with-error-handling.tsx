@@ -11,8 +11,10 @@ import {
   XCircle,
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -164,6 +166,17 @@ type DefaultPasswordChangeFormValues = z.infer<
   typeof DefaultPasswordChangeFormSchema
 >;
 
+const ComponentState = {
+  SignIn: "sign-in",
+  InvalidCredentials: "invalid-credentials",
+  DefaultPasswordChange: "default-password-change",
+} as const;
+
+const FORGOT_PASSWORD_PATH = "/auth/forgot-password" as const;
+
+type ComponentStateValue =
+  (typeof ComponentState)[keyof typeof ComponentState];
+
 interface AuthViewWithErrorHandlingProps {
   path: string;
   callbackURL?: string;
@@ -238,11 +251,15 @@ export function AuthViewWithErrorHandling({
         const url =
           typeof args[0] === "string" ? args[0] : (args[0] as Request)?.url;
 
+        const isPasswordResetRequest = url?.includes(
+          "/api/auth/request-password-reset",
+        );
         const isAuthEndpoint =
           url?.includes("/api/auth/sign-in") ||
           url?.includes("/api/auth/sign-up") ||
           url?.includes("/api/auth/forgot-password") ||
-          url?.includes("/api/auth/reset-password");
+          url?.includes("/api/auth/reset-password") ||
+          isPasswordResetRequest;
 
         // Check for 403 "Invalid origin" errors
         if (isAuthEndpoint && response.status === 403) {
@@ -259,6 +276,18 @@ export function AuthViewWithErrorHandling({
           } catch {
             // Ignore parse errors
           }
+        }
+
+        if (
+          isPasswordResetRequest &&
+          !response.ok &&
+          path === "forgot-password"
+        ) {
+          const message = await getAuthErrorMessageFromResponse(response);
+          toast.error(
+            message ??
+              "Password reset is unavailable. Check backend logs or contact your administrator.",
+          );
         }
 
         // Check if this is a sign-in/sign-up request and if it's a server error
@@ -280,7 +309,8 @@ export function AuthViewWithErrorHandling({
           url?.includes("/api/auth/sign-in") ||
           url?.includes("/api/auth/sign-up") ||
           url?.includes("/api/auth/forgot-password") ||
-          url?.includes("/api/auth/reset-password")
+          url?.includes("/api/auth/reset-password") ||
+          url?.includes("/api/auth/request-password-reset")
         ) {
           console.error("Network error from auth endpoint:", url, error);
           setServerError(true);
@@ -292,7 +322,7 @@ export function AuthViewWithErrorHandling({
     return () => {
       window.fetch = originalFetch;
     };
-  }, []);
+  }, [path]);
 
   if (path === "sign-out") {
     return <SignOutWithIdpLogout />;
@@ -519,11 +549,13 @@ export function AuthViewWithErrorHandling({
 }
 
 function SignInView({ callbackURL }: { callbackURL?: string }) {
+  const [componentState, setComponentState] = useState<ComponentStateValue>(
+    ComponentState.SignIn,
+  );
   const [defaultPasswordRedirectUrl, setDefaultPasswordRedirectUrl] = useState<
     string | null
   >(null);
-  const [defaultAdminCurrentPassword, setDefaultAdminCurrentPassword] =
-    useState<string | null>(null);
+  const defaultAdminCurrentPasswordRef = useRef<string | null>(null);
   const signIn = useSignInWithEmailMutation();
   const changePassword = useChangeAccountPasswordMutation();
   const signInForm = useForm<SignInFormValues>({
@@ -542,17 +574,27 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
   });
 
   async function onSignIn(values: SignInFormValues) {
+    setComponentState(ComponentState.SignIn);
+    setDefaultPasswordRedirectUrl(null);
+    defaultAdminCurrentPasswordRef.current = null;
+
     const result = await signIn.mutateAsync({
       email: values.email,
       password: values.password,
       callbackURL,
     });
 
-    if (!result) return;
+    if (!result.success) {
+      if (result.showForgotPassword) {
+        setComponentState(ComponentState.InvalidCredentials);
+      }
+      return;
+    }
 
     if (result.requiresDefaultPasswordChange) {
       setDefaultPasswordRedirectUrl(result.redirectUrl);
-      setDefaultAdminCurrentPassword(values.password);
+      defaultAdminCurrentPasswordRef.current = values.password;
+      setComponentState(ComponentState.DefaultPasswordChange);
       return;
     }
 
@@ -563,21 +605,35 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
   async function onChangeDefaultPassword(
     values: DefaultPasswordChangeFormValues,
   ) {
-    if (!defaultAdminCurrentPassword) return;
+    if (componentState !== ComponentState.DefaultPasswordChange) return;
+    if (!defaultAdminCurrentPasswordRef.current) return;
 
     const changed = await changePassword.mutateAsync({
-      currentPassword: defaultAdminCurrentPassword,
+      currentPassword: defaultAdminCurrentPasswordRef.current,
       newPassword: values.password,
       revokeOtherSessions: true,
     });
 
     if (changed) {
       clearDefaultPasswordChangePending();
+      defaultAdminCurrentPasswordRef.current = null;
       redirectAfterSignIn(defaultPasswordRedirectUrl ?? callbackURL ?? "/");
     }
   }
 
-  if (defaultPasswordRedirectUrl) {
+  function onBackFromDefaultPasswordChange() {
+    clearDefaultPasswordChangePending();
+    defaultAdminCurrentPasswordRef.current = null;
+    setDefaultPasswordRedirectUrl(null);
+    defaultPasswordChangeForm.reset();
+    signInForm.reset({
+      email: signInForm.getValues("email"),
+      password: "",
+    });
+    setComponentState(ComponentState.SignIn);
+  }
+
+  if (componentState === ComponentState.DefaultPasswordChange) {
     return (
       <Card
         className="w-full"
@@ -648,12 +704,9 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
                   variant="outline"
                   disabled={changePassword.isPending}
                   data-testid={E2eTestId.DefaultPasswordChangeSkipButton}
-                  onClick={() => {
-                    clearDefaultPasswordChangePending();
-                    redirectAfterSignIn(defaultPasswordRedirectUrl);
-                  }}
+                  onClick={onBackFromDefaultPasswordChange}
                 >
-                  Skip
+                  Back
                 </Button>
                 <Button type="submit" disabled={changePassword.isPending}>
                   {changePassword.isPending && (
@@ -730,6 +783,16 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
               )}
               Sign In
             </Button>
+            {componentState === ComponentState.InvalidCredentials && (
+              <div className="text-center">
+                <Link
+                  href={FORGOT_PASSWORD_PATH}
+                  className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+            )}
           </form>
         </Form>
       </CardContent>
@@ -739,4 +802,22 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
 
 function redirectAfterSignIn(url: string) {
   window.location.href = url;
+}
+
+async function getAuthErrorMessageFromResponse(response: Response) {
+  try {
+    const body = (await response.clone().json()) as {
+      message?: string;
+      error?: { message?: string };
+    };
+    if (typeof body.message === "string") {
+      return body.message;
+    }
+    if (typeof body.error?.message === "string") {
+      return body.error.message;
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return null;
 }

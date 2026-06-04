@@ -20,12 +20,7 @@ const safeSetErrorReportingUser = (user: ErrorReportingUser) => {
 };
 
 const pathCorrespondsToAnAuthPage = (pathname: string) => {
-  return (
-    pathname?.startsWith("/auth/sign-in") ||
-    pathname?.startsWith("/auth/sign-up") ||
-    pathname?.startsWith("/auth/sso") ||
-    pathname?.startsWith("/auth/sign-out")
-  );
+  return pathname?.startsWith("/auth/");
 };
 
 /**
