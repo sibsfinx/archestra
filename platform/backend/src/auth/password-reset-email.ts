@@ -1,34 +1,43 @@
-import config from "@/config";
-import logger from "@/logging";
+import { DEFAULT_APP_NAME } from "@shared";
+import { sendTransactionalEmail } from "@/mail/send-transactional";
 
 type PasswordResetEmailParams = {
   email: string;
   url: string;
 };
 
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
 /**
  * Delivers password-reset links for Better Auth's `sendResetPassword` hook.
- *
- * Archestra does not run a shared transactional mailer (SMTP/Resend/etc.) yet.
- * Invitations are link-based in the UI; agent email is inbound-only (Outlook).
- * Until outbound mail is configured, we log the reset URL so local dev and
- * CI can complete the flow — check Tilt / backend logs for the link.
  */
 export async function sendPasswordResetEmail({
   email,
   url,
 }: PasswordResetEmailParams) {
-  if (config.production) {
-    logger.error(
-      { email },
-      "[Auth] Password reset requested but outbound email is not configured. " +
-        "Implement delivery in sendPasswordResetEmail (e.g. SMTP or Resend).",
-    );
-    return;
-  }
+  const subject = `Reset your ${DEFAULT_APP_NAME} password`;
+  const text = [
+    `Reset your ${DEFAULT_APP_NAME} password using the link below:`,
+    "",
+    url,
+    "",
+    "If you did not request this, you can ignore this email.",
+  ].join("\n");
 
-  logger.info(
-    { email, resetUrl: url },
-    "[Auth] Password reset link (dev — no mail provider; copy resetUrl from this log line)",
-  );
+  await sendTransactionalEmail({
+    to: email,
+    subject,
+    text,
+    html: [
+      `<p>Reset your ${DEFAULT_APP_NAME} password using the link below:</p>`,
+      `<p><a href="${escapeHtml(url)}">Reset password</a></p>`,
+      `<p>If you did not request this, you can ignore this email.</p>`,
+    ].join(""),
+  });
 }

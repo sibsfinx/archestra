@@ -26,6 +26,7 @@ import config, {
   parseContentMaxLength,
   parseDatabasePoolMax,
   parseMetricsPort,
+  parseOutboundMailProvider,
   parseProcessType,
   parseS3BlobStorageAuthMethod,
   parseS3BlobStorageBucket,
@@ -1303,6 +1304,51 @@ describe("parseProcessType", () => {
     // These match the derivation: shouldRunWebServer = processType !== "worker", shouldRunWorker = processType !== "web"
     expect(result !== "worker").toBe(webServer);
     expect(result !== "web").toBe(worker);
+  });
+});
+
+describe("parseOutboundMailProvider", () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.ARCHESTRA_MAIL_PROVIDER;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  test("defaults to log when unset outside vitest", () => {
+    delete process.env.VITEST;
+    delete process.env.NODE_ENV;
+    expect(parseOutboundMailProvider()).toBe("log");
+  });
+
+  test("returns brevo when configured", () => {
+    process.env.ARCHESTRA_MAIL_PROVIDER = "brevo";
+    expect(parseOutboundMailProvider()).toBe("brevo");
+  });
+
+  test("returns capture when configured", () => {
+    process.env.ARCHESTRA_MAIL_PROVIDER = "capture";
+    expect(parseOutboundMailProvider()).toBe("capture");
+  });
+
+  test("defaults to capture under vitest when unset", () => {
+    process.env.VITEST = "true";
+    expect(parseOutboundMailProvider()).toBe("capture");
+  });
+
+  test("returns log for unknown providers even under vitest", () => {
+    process.env.VITEST = "true";
+    process.env.ARCHESTRA_MAIL_PROVIDER = "smtp";
+    expect(parseOutboundMailProvider()).toBe("log");
+  });
+
+  test("returns log for unknown providers", () => {
+    process.env.ARCHESTRA_MAIL_PROVIDER = "smtp";
+    expect(parseOutboundMailProvider()).toBe("log");
   });
 });
 

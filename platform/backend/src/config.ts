@@ -14,6 +14,7 @@ import {
 } from "@shared";
 import dotenv from "dotenv";
 import logger from "@/logging";
+import type { MailProviderType } from "@/mail/types";
 import {
   type EmailProviderType,
   EmailProviderTypeSchema,
@@ -224,6 +225,24 @@ const parseIncomingEmailProvider = (): EmailProviderType | undefined => {
     process.env.ARCHESTRA_AGENTS_INCOMING_EMAIL_PROVIDER?.toLowerCase();
   const result = EmailProviderTypeSchema.safeParse(provider);
   return result.success ? result.data : undefined;
+};
+
+/**
+ * Outbound transactional mail (password reset, etc.).
+ * @public — exported for testability
+ */
+export const parseOutboundMailProvider = (): MailProviderType => {
+  const provider = process.env.ARCHESTRA_MAIL_PROVIDER?.trim().toLowerCase();
+  if (provider === "brevo") return "brevo";
+  if (provider === "capture") return "capture";
+  if (provider === "log") return "log";
+  if (
+    !provider &&
+    (process.env.VITEST === "true" || process.env.NODE_ENV === "test")
+  ) {
+    return "capture";
+  }
+  return "log";
 };
 
 /**
@@ -825,6 +844,13 @@ const config = {
     disableBasicAuth: process.env.ARCHESTRA_AUTH_DISABLE_BASIC_AUTH === "true",
     disableInvitations:
       process.env.ARCHESTRA_AUTH_DISABLE_INVITATIONS === "true",
+  },
+  mail: {
+    provider: parseOutboundMailProvider(),
+    from: process.env.ARCHESTRA_MAIL_FROM?.trim() || "",
+    brevo: {
+      apiKey: process.env.ARCHESTRA_MAIL_BREVO_API_KEY?.trim() || "",
+    },
   },
   analytics: getAnalyticsConfig(),
   database: {

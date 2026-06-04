@@ -32,8 +32,9 @@ process.env.ARCHESTRA_ENTERPRISE_LICENSE_FULL_WHITE_LABELING = "true";
 // LISTEN/NOTIFY, so use the polling compatibility notifier by default in tests.
 process.env.ARCHESTRA_CHAT_ACTIVE_RUN_POLLING_COMPATIBILITY_ENABLED = "true";
 
-// Set auth secret for tests
-process.env.ARCHESTRA_AUTH_SECRET = "auth-secret-unit-tests-32-chars!";
+// Force in-memory mail capture for all backend tests. dotenv will not override
+// vars that are already set, so local .env Brevo keys cannot send real mail in CI.
+process.env.ARCHESTRA_MAIL_PROVIDER = "capture";
 
 // Vitest file workers can stack multiple process-level exit listeners during
 // backend test setup/teardown; raise the cap slightly to avoid noisy warnings.
@@ -109,6 +110,9 @@ beforeEach(async () => {
   if (!pgliteClient) {
     throw new Error("Database not initialized. Did beforeAll run?");
   }
+
+  const { emailInterceptor } = await import("../mail/email-interceptor.js");
+  emailInterceptor.clear();
 
   // Get all user tables from the database (excluding system tables)
   const tablesResult = await pgliteClient.query<{ tablename: string }>(`
