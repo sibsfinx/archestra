@@ -200,9 +200,8 @@ async function main() {
   console.log("messageId:", result.messageId);
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-
-if (isMain) {
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
   main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);
