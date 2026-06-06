@@ -14,8 +14,8 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import { useForm } from "react-hook-form";
+import { toast } from "sonner";
 import { z } from "zod";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -174,8 +174,7 @@ const ComponentState = {
 
 const FORGOT_PASSWORD_PATH = "/auth/forgot-password" as const;
 
-type ComponentStateValue =
-  (typeof ComponentState)[keyof typeof ComponentState];
+type ComponentStateValue = (typeof ComponentState)[keyof typeof ComponentState];
 
 interface AuthViewWithErrorHandlingProps {
   path: string;
@@ -621,16 +620,11 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
     }
   }
 
-  function onBackFromDefaultPasswordChange() {
+  function onSkipDefaultPasswordChange() {
     clearDefaultPasswordChangePending();
     defaultAdminCurrentPasswordRef.current = null;
-    setDefaultPasswordRedirectUrl(null);
     defaultPasswordChangeForm.reset();
-    signInForm.reset({
-      email: signInForm.getValues("email"),
-      password: "",
-    });
-    setComponentState(ComponentState.SignIn);
+    redirectAfterSignIn(defaultPasswordRedirectUrl ?? callbackURL ?? "/");
   }
 
   if (componentState === ComponentState.DefaultPasswordChange) {
@@ -704,9 +698,9 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
                   variant="outline"
                   disabled={changePassword.isPending}
                   data-testid={E2eTestId.DefaultPasswordChangeSkipButton}
-                  onClick={onBackFromDefaultPasswordChange}
+                  onClick={onSkipDefaultPasswordChange}
                 >
-                  Back
+                  Skip
                 </Button>
                 <Button type="submit" disabled={changePassword.isPending}>
                   {changePassword.isPending && (

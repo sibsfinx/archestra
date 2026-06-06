@@ -171,7 +171,7 @@ describe("AuthViewWithErrorHandling", () => {
     });
     expect(screen.getByLabelText("New password")).toBeInTheDocument();
     expect(screen.getByLabelText("Confirm password")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Skip" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("New password"), {
       target: { value: "new-admin-password" },
@@ -197,38 +197,51 @@ describe("AuthViewWithErrorHandling", () => {
     });
   });
 
-  it("returns to sign-in when backing out of the default password prompt", async () => {
-    mockSearchParams.get.mockReturnValue(null);
-    mockSignInMutateAsync.mockResolvedValue({
-      success: true,
-      requiresDefaultPasswordChange: true,
-      redirectUrl: "/chat",
+  it("skips the default password prompt and redirects", async () => {
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { href: "http://localhost:3000/auth/sign-in" },
+      writable: true,
     });
 
-    render(<AuthViewWithErrorHandling path="sign-in" callbackURL="/chat" />);
+    try {
+      mockSearchParams.get.mockReturnValue(null);
+      mockSignInMutateAsync.mockResolvedValue({
+        success: true,
+        requiresDefaultPasswordChange: true,
+        redirectUrl: "/chat",
+      });
 
-    fireEvent.change(screen.getByLabelText("Email"), {
-      target: { value: "admin@example.com" },
-    });
-    fireEvent.change(screen.getByLabelText("Password"), {
-      target: { value: "password" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+      render(<AuthViewWithErrorHandling path="sign-in" callbackURL="/chat" />);
 
-    await waitFor(() => {
-      expect(screen.getByText("Change Password")).toBeInTheDocument();
-    });
+      fireEvent.change(screen.getByLabelText("Email"), {
+        target: { value: "admin@example.com" },
+      });
+      fireEvent.change(screen.getByLabelText("Password"), {
+        target: { value: "password" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+      await waitFor(() => {
+        expect(screen.getByText("Change Password")).toBeInTheDocument();
+      });
 
-    await waitFor(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+
+      await waitFor(() => {
+        expect(window.location.href).toBe("/chat");
+      });
       expect(
-        screen.getByText("Enter your email below to login to your account"),
-      ).toBeInTheDocument();
-    });
-    expect(screen.getByLabelText("Email")).toHaveValue("admin@example.com");
-    expect(screen.getByLabelText("Password")).toHaveValue("");
-    expect(screen.queryByText("Change Password")).not.toBeInTheDocument();
+        window.sessionStorage.getItem("archestra.defaultPasswordChangePending"),
+      ).toBeNull();
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation,
+        writable: true,
+      });
+    }
   });
 
   it("shows a forgot-password link for invalid credentials", async () => {
