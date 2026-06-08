@@ -52393,6 +52393,7 @@ export type GetTeamsData = {
         limit?: number;
         offset?: number;
         name?: string;
+        mine?: boolean;
     };
     url: '/api/teams';
 };
