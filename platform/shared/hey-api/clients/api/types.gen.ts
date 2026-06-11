@@ -13741,6 +13741,93 @@ export type AssignToolToAgentResponses = {
 
 export type AssignToolToAgentResponse = AssignToolToAgentResponses[keyof AssignToolToAgentResponses];
 
+export type GrantToolToAgentData = {
+    body: {
+        toolName: string;
+    };
+    path: {
+        agentId: string;
+    };
+    query?: never;
+    url: '/api/agents/{agentId}/tools/grant';
+};
+
+export type GrantToolToAgentErrors = {
+    /**
+     * Default Response
+     */
+    400: {
+        error: {
+            message: string;
+            type: 'api_validation_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    401: {
+        error: {
+            message: string;
+            type: 'api_authentication_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    403: {
+        error: {
+            message: string;
+            type: 'api_authorization_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    404: {
+        error: {
+            message: string;
+            type: 'api_not_found_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    409: {
+        error: {
+            message: string;
+            type: 'api_conflict_error';
+            internal_code?: string;
+        };
+    };
+    /**
+     * Default Response
+     */
+    500: {
+        error: {
+            message: string;
+            type: 'api_internal_server_error';
+            internal_code?: string;
+        };
+    };
+};
+
+export type GrantToolToAgentError = GrantToolToAgentErrors[keyof GrantToolToAgentErrors];
+
+export type GrantToolToAgentResponses = {
+    /**
+     * Default Response
+     */
+    200: {
+        success: boolean;
+    };
+};
+
+export type GrantToolToAgentResponse = GrantToolToAgentResponses[keyof GrantToolToAgentResponses];
+
 export type BulkAssignToolsData = {
     body: {
         assignments: Array<{
@@ -46197,6 +46284,7 @@ export type GetOrganizationResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
@@ -46489,6 +46577,7 @@ export type UpdateAppearanceSettingsResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
@@ -46561,6 +46650,7 @@ export type UpdateSecuritySettingsData = {
     body: {
         globalToolPolicy?: 'permissive' | 'restrictive';
         allowChatFileUploads?: boolean;
+        allowToolAutoAssignment?: boolean;
     };
     path?: never;
     query?: never;
@@ -46652,6 +46742,7 @@ export type UpdateSecuritySettingsResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
@@ -46818,6 +46909,7 @@ export type UpdateLlmSettingsResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
@@ -46983,6 +47075,7 @@ export type UpdateAgentSettingsResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
@@ -47158,6 +47251,7 @@ export type UpdateConnectionSettingsResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
@@ -47330,6 +47424,7 @@ export type UpdateDefaultEnvironmentResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
@@ -47493,6 +47588,7 @@ export type UpdateAuthSettingsResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
@@ -47658,6 +47754,7 @@ export type UpdateKnowledgeSettingsResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
@@ -47818,6 +47915,7 @@ export type DropEmbeddingConfigResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
@@ -48067,6 +48165,7 @@ export type CompleteOnboardingResponses = {
         compressionScope: 'organization' | 'team';
         globalToolPolicy: 'permissive' | 'restrictive';
         allowChatFileUploads: boolean;
+        allowToolAutoAssignment: boolean;
         embeddingModel: string | null;
         embeddingDimensions: EmbeddingDimensions | null;
         embeddingChatApiKeyId: string | null;
