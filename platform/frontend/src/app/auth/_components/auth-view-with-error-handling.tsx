@@ -1,7 +1,7 @@
 "use client";
 
+import { E2eTestId, GITHUB_REPO_NEW_ISSUE_URL } from "@archestra/shared";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { E2eTestId, GITHUB_REPO_NEW_ISSUE_URL } from "@shared";
 import {
   AlertCircle,
   ExternalLink,
@@ -49,7 +49,9 @@ import {
 import config from "@/lib/config/config";
 import { usePublicConfig } from "@/lib/config/config.query";
 import { useAppName } from "@/lib/hooks/use-app-name";
+import { RecoverAccountView } from "./recover-account-view";
 import { SignOutWithIdpLogout } from "./sign-out-with-idp-logout";
+import { TwoFactorView } from "./two-factor-view";
 
 const IdentityProviderSelector = dynamic(async () => {
   if (!config.enterpriseFeatures.core) return () => null;
@@ -57,11 +59,6 @@ const IdentityProviderSelector = dynamic(async () => {
   // biome-ignore lint/style/noRestrictedImports: conditional EE component with IdP selector
   const module = await import("@/components/identity-provider-selector.ee");
   return module.IdentityProviderSelector;
-});
-
-const BetterAuthView = dynamic(async () => {
-  const module = await import("@daveyplate/better-auth-ui");
-  return module.AuthView;
 });
 
 /**
@@ -154,9 +151,9 @@ const SignInFormSchema = z.object({
 const DefaultPasswordChangeFormSchema = z
   .object({
     password: z.string().min(8, "Password must be at least 8 characters"),
-    confirmPassword: z.string().min(1, "Confirm your new password"),
+    confirmPassword: z.string().min(1, "Confirm your password"),
   })
-  .refine((value) => value.password === value.confirmPassword, {
+  .refine((values) => values.password === values.confirmPassword, {
     message: "Passwords do not match",
     path: ["confirmPassword"],
   });
@@ -328,11 +325,17 @@ export function AuthViewWithErrorHandling({
     return <SignOutWithIdpLogout />;
   }
 
-  const isSignInPage = path === "sign-in";
+  if (path === "two-factor") {
+    return <TwoFactorView />;
+  }
 
-  // These paths should always render AuthView regardless of basic auth setting
-  // (callback, error, etc. are handled by better-auth-ui)
-  const alwaysShowAuthView = !isSignInPage && path !== "sign-up";
+  if (path === "recover-account") {
+    return <RecoverAccountView />;
+  }
+
+  // Only sign-in remains: sign-up is handled upstream (blocked without an
+  // invitation, redirected to /auth/sign-up-with-invitation with one).
+  const isSignInPage = path === "sign-in";
 
   if (isLoadingPublicConfig && isSignInPage) {
     return null;
@@ -511,31 +514,8 @@ export function AuthViewWithErrorHandling({
         </Alert>
       )}
       <div className="space-y-4">
-        {!isBasicAuthDisabled && isSignInPage ? (
+        {!isBasicAuthDisabled && isSignInPage && (
           <SignInView callbackURL={callbackURL} />
-        ) : (
-          alwaysShowAuthView && (
-            <BetterAuthView
-              path={path}
-              callbackURL={callbackURL}
-              classNames={{
-                base: "bg-card text-card-foreground flex flex-col gap-6 rounded-xl border py-6 shadow-sm w-full max-w-full",
-                footer: "hidden",
-                form: { forgotPasswordLink: "hidden" },
-              }}
-            />
-          )
-        )}
-        {!isSignInPage && !alwaysShowAuthView && !isBasicAuthDisabled && (
-          <BetterAuthView
-            path={path}
-            callbackURL={callbackURL}
-            classNames={{
-              base: "bg-card text-card-foreground flex flex-col gap-6 rounded-xl border py-6 shadow-sm w-full max-w-full",
-              footer: "hidden",
-              form: { forgotPasswordLink: "hidden" },
-            }}
-          />
         )}
         {isSignInPage && config.enterpriseFeatures.core && (
           <IdentityProviderSelector
@@ -588,6 +568,15 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
       if (result.showForgotPassword) {
         setComponentState(ComponentState.InvalidCredentials);
       }
+      return;
+    }
+
+    if (result.twoFactorRedirect) {
+      redirectAfterSignIn(
+        callbackURL
+          ? `/auth/two-factor?redirectTo=${encodeURIComponent(callbackURL)}`
+          : "/auth/two-factor",
+      );
       return;
     }
 

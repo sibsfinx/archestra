@@ -37,6 +37,7 @@ const testPatterns = {
 
 const uiTestMatch = [
   "**/agents.spec.ts",
+  "**/apps.spec.ts",
   "**/audit-log.spec.ts",
   "**/auth-origin.spec.ts",
   "**/auth-redirect.spec.ts",
@@ -52,6 +53,7 @@ const uiTestMatch = [
   "**/llm-provider-api-keys.spec.ts",
   "**/mail-settings.spec.ts",
   "**/mcp-catalog-clone.spec.ts",
+  "**/mcp-catalog-promote-to-team.spec.ts",
   "**/mcp-install.spec.ts",
   "**/onboarding-mail.spec.ts",
   "**/quickstart.spec.ts",

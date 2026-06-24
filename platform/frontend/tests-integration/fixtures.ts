@@ -5,6 +5,7 @@ import { LlmProviderApiKeysPage } from "./pages/llm-provider-api-keys-page";
 import { MailSettingsPage } from "./pages/mail-settings-page";
 import { OnboardingMailPage } from "./pages/onboarding-mail-page";
 import { McpRegistryPage } from "./pages/mcp-registry-page";
+import { SkillsNewPage } from "./pages/skills-new-page";
 import { VirtualKeysPage } from "./pages/virtual-keys-page";
 
 // Biome's useImportType rule otherwise rewrites these to `import type` because
@@ -13,6 +14,7 @@ import { VirtualKeysPage } from "./pages/virtual-keys-page";
 // build time — keep value imports.
 void AgentsPage;
 void LlmProviderApiKeysPage;
+void SkillsNewPage;
 void VirtualKeysPage;
 void MailSettingsPage;
 void OnboardingMailPage;
@@ -24,6 +26,7 @@ type Fixtures = {
   onboardingMailPage: OnboardingMailPage;
   mcpRegistryPage: McpRegistryPage;
   mswControl: MswControl;
+  skillsNewPage: SkillsNewPage;
   virtualKeysPage: VirtualKeysPage;
 };
 
@@ -53,6 +56,9 @@ export const test = base.extend<Fixtures & AutoFixtures>({
   mcpRegistryPage: async ({ page }, use) => {
     await use(new McpRegistryPage(page));
   },
+  skillsNewPage: async ({ page }, use) => {
+    await use(new SkillsNewPage(page));
+  },
   virtualKeysPage: async ({ page }, use) => {
     await use(new VirtualKeysPage(page));
   },
@@ -61,6 +67,7 @@ export const test = base.extend<Fixtures & AutoFixtures>({
       throw new Error("baseURL is required for mswControl fixture");
     }
     const control = new MswControl(request, page, baseURL);
+    await control.reset();
     await use(control);
     // Reset after each test so overrides and unhandled-request lists don't
     // leak across tests when the Next.js dev server is reused

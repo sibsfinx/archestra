@@ -1,4 +1,4 @@
-import { archestraApiSdk, DEFAULT_ADMIN_EMAIL } from "@shared";
+import { archestraApiSdk, DEFAULT_ADMIN_EMAIL } from "@archestra/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { authQueryKeys } from "@/lib/auth/auth.query";
@@ -16,6 +16,12 @@ type AuthClientError = {
 export type SignInResult =
   | {
       success: true;
+      twoFactorRedirect: true;
+      redirectUrl: null;
+    }
+  | {
+      success: true;
+      twoFactorRedirect?: false;
       requiresDefaultPasswordChange: boolean;
       redirectUrl: string;
     }
@@ -112,6 +118,14 @@ export function useSignInWithEmailMutation() {
         return {
           success: false,
           showForgotPassword: isInvalidSignInCredentialsError(errorMessage),
+        } satisfies SignInResult;
+      }
+
+      if (data && "twoFactorRedirect" in data && data.twoFactorRedirect) {
+        return {
+          success: true,
+          twoFactorRedirect: true,
+          redirectUrl: null,
         } satisfies SignInResult;
       }
 

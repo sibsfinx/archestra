@@ -1,6 +1,6 @@
 "use client";
 
-import { DEFAULT_ADMIN_EMAIL, E2eTestId } from "@shared";
+import { DEFAULT_ADMIN_EMAIL, E2eTestId } from "@archestra/shared";
 import { AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import {

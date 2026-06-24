@@ -1,6 +1,6 @@
 "use client";
 
-import { calculateCostSavings, DynamicInteraction } from "@shared";
+import { calculateCostSavings, DynamicInteraction } from "@archestra/shared";
 import {
   ArrowLeft,
   Bot,
@@ -90,6 +90,12 @@ export default function SessionDetailPage({
   const totalOutputTokens =
     sessionData?.totalOutputTokens ??
     interactions.reduce((sum, i) => sum + (i.outputTokens ?? 0), 0);
+  const totalCacheReadTokens =
+    sessionData?.totalCacheReadTokens ??
+    interactions.reduce((sum, i) => sum + (i.cacheReadTokens ?? 0), 0);
+  const totalCacheWriteTokens =
+    sessionData?.totalCacheWriteTokens ??
+    interactions.reduce((sum, i) => sum + (i.cacheWriteTokens ?? 0), 0);
   const models = sessionData?.models ?? [
     ...new Set(interactions.map((i) => i.model).filter(Boolean)),
   ];
@@ -103,6 +109,13 @@ export default function SessionDetailPage({
 
   // Session metadata from API
   const sessionSource = sessionData?.sessionSource;
+  // Badge label for the Claude clients (Code and Desktop); null for other sources.
+  const claudeSourceLabel =
+    sessionSource === "claude_code"
+      ? "Claude Code"
+      : sessionSource === "claude_desktop"
+        ? "Claude Desktop"
+        : null;
   const profileName = sessionData?.profileName;
   const userNames = sessionData?.userNames ?? [];
 
@@ -169,12 +182,12 @@ export default function SessionDetailPage({
         title={sessionTitle || "Session"}
         badges={
           <>
-            {sessionSource === "claude_code" && (
+            {claudeSourceLabel && (
               <Badge
                 variant="secondary"
                 className="text-xs bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300"
               >
-                Claude Code
+                {claudeSourceLabel}
               </Badge>
             )}
             <SourceBadge source={sessionData?.source} />
@@ -211,6 +224,12 @@ export default function SessionDetailPage({
             {totalInputTokens.toLocaleString()} in /{" "}
             {totalOutputTokens.toLocaleString()} out
           </div>
+          {(totalCacheReadTokens > 0 || totalCacheWriteTokens > 0) && (
+            <div className="font-mono text-xs text-muted-foreground">
+              {totalCacheReadTokens.toLocaleString()} cache read /{" "}
+              {totalCacheWriteTokens.toLocaleString()} cache write
+            </div>
+          )}
         </MetadataItem>
         <MetadataItem label="Total Cost">
           <div className="font-mono">

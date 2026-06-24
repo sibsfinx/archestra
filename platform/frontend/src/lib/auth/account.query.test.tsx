@@ -1,4 +1,4 @@
-import { archestraApiSdk } from "@shared";
+import { archestraApiSdk } from "@archestra/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -26,12 +26,15 @@ vi.mock("@/lib/clients/auth/auth-client", () => ({
   },
 }));
 
-vi.mock("@shared", () => ({
-  archestraApiSdk: {
-    getDefaultCredentialsStatus: vi.fn(),
-  },
-  DEFAULT_ADMIN_EMAIL: "admin@example.com",
-}));
+vi.mock("@archestra/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@archestra/shared")>();
+  return {
+    ...actual,
+    archestraApiSdk: {
+      getDefaultCredentialsStatus: vi.fn(),
+    },
+  };
+});
 
 describe("useChangeAccountPasswordMutation", () => {
   beforeEach(() => {
@@ -58,6 +61,12 @@ describe("useChangeAccountPasswordMutation", () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith("Current password is invalid");
     });
+  });
+});
+
+describe("useSignInWithEmailMutation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("checks backend default credential status after default admin email sign-in", async () => {

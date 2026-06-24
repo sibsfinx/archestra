@@ -1,6 +1,6 @@
 "use client";
 
-import { E2eTestId } from "@shared";
+import { E2eTestId } from "@archestra/shared";
 import {
   ArrowRight,
   Bot,
@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
+import { useFeature } from "@/lib/config/config.query";
 import { useAppName } from "@/lib/hooks/use-app-name";
 import {
   type MailSettings,
@@ -53,6 +54,7 @@ export function AlternativeOnboardingDialog({
   open,
 }: AlternativeOnboardingDialogProps) {
   const appName = useAppName();
+  const betaEnabled = useFeature("betaEnabled") === true;
   const { data: session } = useSession();
   const { data: canUpdateOrgSettings } = useHasPermissions({
     organizationSettings: ["update"],
@@ -89,10 +91,10 @@ export function AlternativeOnboardingDialog({
     if (selectedOption === "chat") {
       window.location.href = "/chat";
     } else if (selectedOption === "proxy") {
-      window.location.href = "/connection";
+      window.location.href = betaEnabled ? "/connection_beta" : "/connection";
     }
     completeOnboarding();
-  }, [completeOnboarding, selectedOption]);
+  }, [betaEnabled, completeOnboarding, selectedOption]);
 
   const handleFinishOnboarding = useCallback(() => {
     completeOnboarding();
