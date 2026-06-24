@@ -1,4 +1,4 @@
-import { archestraApiClient } from "@shared";
+import { archestraApiClient } from "@archestra/shared";
 import {
   type UseQueryOptions,
   useMutation,

@@ -20,7 +20,6 @@
     "test:integration": "playwright test",
     "test:integration:ui": "playwright test --ui",
     "test:integration:report": "playwright show-report",
-    "record:onboarding-mail-demo": "playwright test --config=playwright.demo.config.ts; pnpm -w exec tsx ./scripts/copy-onboarding-demo-video.ts",
     "check:ci": "concurrently --kill-others-on-fail --group --names type-check,test,knip,biome 'pnpm type-check' 'pnpm test' 'pnpm knip' 'biome ci'",
     "check:commit": "concurrently --kill-others-on-fail --group --names type-check,knip,biome 'pnpm type-check' 'pnpm knip' 'biome ci'",
     "knip": "knip"
