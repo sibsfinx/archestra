@@ -1,6 +1,6 @@
 "use client";
 
-import { DEFAULT_ADMIN_EMAIL } from "@shared";
+import { DEFAULT_ADMIN_EMAIL, E2eTestId } from "@shared";
 import { AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import {
@@ -23,6 +23,7 @@ import {
   useSession,
 } from "@/lib/auth/auth.query";
 import { useDisableBasicAuth, useFeature } from "@/lib/config/config.query";
+import { useMailStatus } from "@/lib/mail-settings.query";
 import { cn } from "@/lib/utils";
 
 export function SidebarWarningsAccordion() {
@@ -38,6 +39,12 @@ export function SidebarWarningsAccordion() {
   const { data: canUpdateAgentSettings } = useHasPermissions({
     agentSettings: ["update"],
   });
+  const { data: canUpdateOrgSettings } = useHasPermissions({
+    organizationSettings: ["update"],
+  });
+  const { data: mailStatus } = useMailStatus({
+    enabled: canUpdateOrgSettings === true,
+  });
   const { state: sidebarState } = useSidebar();
 
   const isPermissive = globalToolPolicy === "permissive";
@@ -52,16 +59,37 @@ export function SidebarWarningsAccordion() {
     defaultCredentialsEnabled &&
     userEmail === DEFAULT_ADMIN_EMAIL;
 
-  const warnings = [
-    showDefaultCredsWarning && {
+  const showMailWarning =
+    canUpdateOrgSettings === true &&
+    mailStatus !== undefined &&
+    !mailStatus.configured;
+
+  type SidebarWarning = {
+    label: string;
+    href: string;
+    testId?: string;
+  };
+
+  const warnings: SidebarWarning[] = [];
+  if (showMailWarning) {
+    warnings.push({
+      label: "Configure outbound mail",
+      href: "/settings/mail",
+      testId: E2eTestId.SidebarMailWarningLink,
+    });
+  }
+  if (showDefaultCredsWarning) {
+    warnings.push({
       label: "Change default credentials",
       href: "/settings/account?highlight=change-password",
-    },
-    showSecurityEngineWarning && {
+    });
+  }
+  if (showSecurityEngineWarning) {
+    warnings.push({
       label: "Enable security engine",
       href: "/mcp/tool-guardrails",
-    },
-  ].filter((w): w is { label: string; href: string } => Boolean(w));
+    });
+  }
 
   if (warnings.length === 0) {
     return null;
@@ -118,7 +146,14 @@ export function SidebarWarningsAccordion() {
               </span>
             </SidebarMenuItem>
           ) : (
-            warnings.map((w) => <WarningItem key={w.label} {...w} />)
+            warnings.map((w) => (
+              <WarningItem
+                key={w.label}
+                label={w.label}
+                href={w.href}
+                testId={w.testId}
+              />
+            ))
           )}
         </SidebarMenu>
       </SidebarGroupContent>
@@ -126,7 +161,15 @@ export function SidebarWarningsAccordion() {
   );
 }
 
-function WarningItem({ label, href }: { label: string; href: string }) {
+function WarningItem({
+  label,
+  href,
+  testId,
+}: {
+  label: string;
+  href: string;
+  testId?: string;
+}) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
@@ -134,7 +177,7 @@ function WarningItem({ label, href }: { label: string; href: string }) {
         tooltip={label}
         className="text-destructive hover:text-destructive"
       >
-        <Link href={href}>
+        <Link href={href} data-testid={testId}>
           <AlertTriangle className="shrink-0" />
           <span>{label}</span>
         </Link>

@@ -1,18 +1,30 @@
 import config from "@/config";
 import logger from "@/logging";
-import { parseMailFrom } from "./parse-from";
-import { sendViaBrevoProvider } from "./providers/brevo";
+import { resolveMailConfig } from "./resolve-mail-config";
 import { sendViaCaptureProvider } from "./providers/capture";
 import { sendViaLogProvider } from "./providers/log";
+import { sendViaSmtpProvider } from "./providers/smtp";
 import type { TransactionalEmail } from "./types";
+
+type SendTransactionalEmailOptions = {
+  organizationId?: string;
+  throwOnError?: boolean;
+};
 
 /**
  * Sends a transactional email using the configured outbound mail provider.
- * Failures are logged and never propagated to auth callers.
+ * Failures are logged and never propagated to auth callers unless `throwOnError`.
  */
-export async function sendTransactionalEmail(message: TransactionalEmail) {
+export async function sendTransactionalEmail(
+  message: TransactionalEmail,
+  options: SendTransactionalEmailOptions = {},
+) {
+  const { throwOnError = false } = options;
+
   try {
-    if (config.mail.provider === "capture") {
+    const mailConfig = await resolveMailConfig(options.organizationId);
+
+    if (mailConfig.provider === "capture") {
       if (config.production) {
         throw new Error("ARCHESTRA_MAIL_PROVIDER=capture is not allowed in production");
       }
@@ -25,23 +37,26 @@ export async function sendTransactionalEmail(message: TransactionalEmail) {
       return;
     }
 
-    if (config.mail.provider === "brevo") {
-      const sender = parseMailFrom(config.mail.from);
-      if (!config.mail.brevo.apiKey) {
-        throw new Error("ARCHESTRA_MAIL_BREVO_API_KEY is not set");
+    if (mailConfig.provider === "smtp") {
+      if (!mailConfig.smtp?.host || !mailConfig.smtp.port) {
+        throw new Error("SMTP host and port are not configured");
       }
-      if (!sender) {
-        throw new Error(
-          "ARCHESTRA_MAIL_FROM must be set to a verified sender (e.g. Archestra <noreply@yourdomain.com>)",
-        );
+      if (!mailConfig.smtp.fromAddress) {
+        throw new Error("From address is not configured");
       }
 
-      await sendViaBrevoProvider(message, {
-        apiKey: config.mail.brevo.apiKey,
-        sender,
+      await sendViaSmtpProvider(message, {
+        host: mailConfig.smtp.host,
+        port: mailConfig.smtp.port,
+        tlsMode: mailConfig.smtp.tlsMode,
+        username: mailConfig.smtp.username,
+        password: mailConfig.smtp.password,
+        fromAddress: mailConfig.smtp.fromAddress,
+        fromName: mailConfig.smtp.fromName,
+        replyTo: mailConfig.smtp.replyTo,
       });
       logger.info(
-        { to: message.to, subject: message.subject, provider: "brevo" },
+        { to: message.to, subject: message.subject, provider: "smtp" },
         "[Mail] Sent transactional email",
       );
       return;
@@ -54,12 +69,8 @@ export async function sendTransactionalEmail(message: TransactionalEmail) {
       "[Mail] Failed to send transactional email",
     );
 
-    if (!config.production && config.mail.provider === "brevo") {
-      logger.info(
-        { to: message.to, text: message.text },
-        "[Mail] Falling back to log output after Brevo failure",
-      );
-      await sendViaLogProvider(message);
+    if (throwOnError) {
+      throw error;
     }
   }
 }

@@ -2,6 +2,8 @@ import { test as base } from "@playwright/test";
 import { MswControl } from "./helpers/msw-control";
 import { AgentsPage } from "./pages/agents-page";
 import { LlmProviderApiKeysPage } from "./pages/llm-provider-api-keys-page";
+import { MailSettingsPage } from "./pages/mail-settings-page";
+import { OnboardingMailPage } from "./pages/onboarding-mail-page";
 import { McpRegistryPage } from "./pages/mcp-registry-page";
 import { VirtualKeysPage } from "./pages/virtual-keys-page";
 
@@ -12,10 +14,14 @@ import { VirtualKeysPage } from "./pages/virtual-keys-page";
 void AgentsPage;
 void LlmProviderApiKeysPage;
 void VirtualKeysPage;
+void MailSettingsPage;
+void OnboardingMailPage;
 
 type Fixtures = {
   agentsPage: AgentsPage;
   llmKeysPage: LlmProviderApiKeysPage;
+  mailSettingsPage: MailSettingsPage;
+  onboardingMailPage: OnboardingMailPage;
   mcpRegistryPage: McpRegistryPage;
   mswControl: MswControl;
   virtualKeysPage: VirtualKeysPage;
@@ -37,6 +43,12 @@ export const test = base.extend<Fixtures & AutoFixtures>({
   },
   llmKeysPage: async ({ page }, use) => {
     await use(new LlmProviderApiKeysPage(page));
+  },
+  mailSettingsPage: async ({ page }, use) => {
+    await use(new MailSettingsPage(page));
+  },
+  onboardingMailPage: async ({ page }, use) => {
+    await use(new OnboardingMailPage(page));
   },
   mcpRegistryPage: async ({ page }, use) => {
     await use(new McpRegistryPage(page));

@@ -233,7 +233,7 @@ const parseIncomingEmailProvider = (): EmailProviderType | undefined => {
  */
 export const parseOutboundMailProvider = (): MailProviderType => {
   const provider = process.env.ARCHESTRA_MAIL_PROVIDER?.trim().toLowerCase();
-  if (provider === "brevo") return "brevo";
+  if (provider === "smtp") return "smtp";
   if (provider === "capture") return "capture";
   if (provider === "log") return "log";
   if (
@@ -848,8 +848,19 @@ const config = {
   mail: {
     provider: parseOutboundMailProvider(),
     from: process.env.ARCHESTRA_MAIL_FROM?.trim() || "",
-    brevo: {
-      apiKey: process.env.ARCHESTRA_MAIL_BREVO_API_KEY?.trim() || "",
+    smtp: {
+      host: process.env.ARCHESTRA_MAIL_SMTP_HOST?.trim() || "",
+      port: process.env.ARCHESTRA_MAIL_SMTP_PORT
+        ? Number.parseInt(process.env.ARCHESTRA_MAIL_SMTP_PORT, 10)
+        : 587,
+      tlsMode:
+        (process.env.ARCHESTRA_MAIL_SMTP_TLS_MODE?.trim() as
+          | "none"
+          | "starttls"
+          | "tls"
+          | undefined) || "starttls",
+      username: process.env.ARCHESTRA_MAIL_SMTP_USERNAME?.trim() || "",
+      password: process.env.ARCHESTRA_MAIL_SMTP_PASSWORD?.trim() || "",
     },
   },
   analytics: getAnalyticsConfig(),

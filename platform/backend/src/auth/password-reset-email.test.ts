@@ -4,9 +4,15 @@ import { emailInterceptor } from "@/mail/email-interceptor";
 const mockConfig = vi.hoisted(() => ({
   production: false,
   mail: {
-    provider: "capture" as "log" | "brevo" | "capture",
+    provider: "capture" as "log" | "smtp" | "capture",
     from: "",
-    brevo: { apiKey: "" },
+    smtp: {
+      host: "",
+      port: 587,
+      tlsMode: "starttls" as const,
+      username: "",
+      password: "",
+    },
   },
 }));
 
@@ -19,6 +25,15 @@ vi.mock("@/logging", () => ({
 
 vi.mock("@/config", () => ({
   default: mockConfig,
+}));
+
+vi.mock("@/mail/resolve-mail-config", () => ({
+  resolveMailConfig: vi.fn(async () => ({
+    provider: mockConfig.mail.provider,
+    from: mockConfig.mail.from,
+    smtp: null,
+    overriddenByEnv: false,
+  })),
 }));
 
 const { sendPasswordResetEmail } = await import("./password-reset-email");

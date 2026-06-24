@@ -502,6 +502,12 @@ export const RouteId = {
   // Invitation Routes
   CheckInvitation: "checkInvitation",
 
+  // Mail Settings Routes
+  GetMailSettings: "getMailSettings",
+  UpdateMailSettings: "updateMailSettings",
+  GetMailStatus: "getMailStatus",
+  TestMailSettings: "testMailSettings",
+
   // Site Notification Routes
   GetSiteNotification: "getSiteNotification",
   GetSiteNotificationSettings: "getSiteNotificationSettings",

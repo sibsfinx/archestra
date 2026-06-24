@@ -94,6 +94,7 @@ export { default as llmProviderApiKeysTable } from "./llm-provider-api-key";
 export { default as llmProviderApiKeyModelsTable } from "./llm-provider-api-key-model";
 export { default as mcpCatalogLabelsTable } from "./mcp-catalog-label";
 export { default as mcpCatalogTeamsTable } from "./mcp-catalog-team";
+export { default as mailSettingsTable } from "./mail-settings";
 export { default as mcpHttpSessionsTable } from "./mcp-http-session";
 export { default as mcpPresetEntriesTable } from "./mcp-preset-entry";
 export { default as mcpServersTable } from "./mcp-server";

@@ -33,7 +33,7 @@ process.env.ARCHESTRA_ENTERPRISE_LICENSE_FULL_WHITE_LABELING = "true";
 process.env.ARCHESTRA_CHAT_ACTIVE_RUN_POLLING_COMPATIBILITY_ENABLED = "true";
 
 // Force in-memory mail capture for all backend tests. dotenv will not override
-// vars that are already set, so local .env Brevo keys cannot send real mail in CI.
+// vars that are already set, so local .env mail settings cannot send real mail in CI.
 process.env.ARCHESTRA_MAIL_PROVIDER = "capture";
 
 // Vitest file workers can stack multiple process-level exit listeners during

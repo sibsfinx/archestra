@@ -6,32 +6,28 @@ const mockLogger = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
-const mockConfig = vi.hoisted(() => ({
-  production: false,
-  mail: {
-    provider: "log" as "log" | "brevo" | "capture",
-    from: "",
-    brevo: { apiKey: "" },
-  },
-}));
-
-const mockSendViaBrevoProvider = vi.hoisted(() => vi.fn());
+const mockResolveMailConfig = vi.hoisted(() => vi.fn());
 const mockSendViaLogProvider = vi.hoisted(() => vi.fn());
+const mockSendViaSmtpProvider = vi.hoisted(() => vi.fn());
 
 vi.mock("@/logging", () => ({
   default: mockLogger,
 }));
 
 vi.mock("@/config", () => ({
-  default: mockConfig,
+  default: { production: false },
 }));
 
-vi.mock("./providers/brevo", () => ({
-  sendViaBrevoProvider: mockSendViaBrevoProvider,
+vi.mock("./resolve-mail-config", () => ({
+  resolveMailConfig: mockResolveMailConfig,
 }));
 
 vi.mock("./providers/log", () => ({
   sendViaLogProvider: mockSendViaLogProvider,
+}));
+
+vi.mock("./providers/smtp", () => ({
+  sendViaSmtpProvider: mockSendViaSmtpProvider,
 }));
 
 const { sendTransactionalEmail } = await import("./send-transactional");
@@ -39,8 +35,12 @@ const { sendTransactionalEmail } = await import("./send-transactional");
 describe("sendTransactionalEmail", () => {
   test("captures email via interceptor when provider is capture", async () => {
     emailInterceptor.clear();
-    mockConfig.mail.provider = "capture";
-    mockConfig.production = false;
+    mockResolveMailConfig.mockResolvedValue({
+      provider: "capture",
+      from: "",
+      smtp: null,
+      overriddenByEnv: false,
+    });
     mockLogger.info.mockClear();
 
     await sendTransactionalEmail({
@@ -62,9 +62,14 @@ describe("sendTransactionalEmail", () => {
   });
 
   test("uses log provider by default", async () => {
-    mockConfig.mail.provider = "log";
+    mockResolveMailConfig.mockResolvedValue({
+      provider: "log",
+      from: "",
+      smtp: null,
+      overriddenByEnv: false,
+    });
     mockSendViaLogProvider.mockClear();
-    mockSendViaBrevoProvider.mockClear();
+    mockSendViaSmtpProvider.mockClear();
 
     await sendTransactionalEmail({
       to: "user@example.com",
@@ -77,14 +82,25 @@ describe("sendTransactionalEmail", () => {
       subject: "Test",
       text: "Hello",
     });
-    expect(mockSendViaBrevoProvider).not.toHaveBeenCalled();
+    expect(mockSendViaSmtpProvider).not.toHaveBeenCalled();
   });
 
-  test("sends via Brevo when configured", async () => {
-    mockConfig.mail.provider = "brevo";
-    mockConfig.mail.from = "Archestra <noreply@example.com>";
-    mockConfig.mail.brevo.apiKey = "test-key";
-    mockSendViaBrevoProvider.mockResolvedValue(undefined);
+  test("sends via SMTP when configured", async () => {
+    mockResolveMailConfig.mockResolvedValue({
+      provider: "smtp",
+      from: "noreply@example.com",
+      smtp: {
+        host: "smtp.example.com",
+        port: 587,
+        tlsMode: "starttls",
+        username: "user",
+        password: "pass",
+        fromAddress: "noreply@example.com",
+        fromName: "Archestra",
+      },
+      overriddenByEnv: false,
+    });
+    mockSendViaSmtpProvider.mockResolvedValue(undefined);
     mockSendViaLogProvider.mockClear();
     mockLogger.info.mockClear();
 
@@ -94,39 +110,57 @@ describe("sendTransactionalEmail", () => {
       text: "https://example.com/reset",
     });
 
-    expect(mockSendViaBrevoProvider).toHaveBeenCalledWith(
+    expect(mockSendViaSmtpProvider).toHaveBeenCalledWith(
       {
         to: "user@example.com",
         subject: "Reset password",
         text: "https://example.com/reset",
       },
       {
-        apiKey: "test-key",
-        sender: { name: "Archestra", email: "noreply@example.com" },
+        host: "smtp.example.com",
+        port: 587,
+        tlsMode: "starttls",
+        username: "user",
+        password: "pass",
+        fromAddress: "noreply@example.com",
+        fromName: "Archestra",
+        replyTo: undefined,
       },
     );
     expect(mockLogger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "brevo", to: "user@example.com" }),
+      expect.objectContaining({ provider: "smtp", to: "user@example.com" }),
       "[Mail] Sent transactional email",
     );
   });
 
-  test("falls back to log provider in dev when Brevo fails", async () => {
-    mockConfig.mail.provider = "brevo";
-    mockConfig.mail.from = "Archestra <noreply@example.com>";
-    mockConfig.mail.brevo.apiKey = "test-key";
-    mockConfig.production = false;
-    mockSendViaBrevoProvider.mockRejectedValue(new Error("Brevo down"));
+  test("propagates SMTP errors when throwOnError is set", async () => {
+    mockResolveMailConfig.mockResolvedValue({
+      provider: "smtp",
+      from: "noreply@example.com",
+      smtp: {
+        host: "smtp.example.com",
+        port: 587,
+        tlsMode: "starttls",
+        fromAddress: "noreply@example.com",
+      },
+      overriddenByEnv: false,
+    });
+    mockSendViaSmtpProvider.mockRejectedValue(new Error("SMTP down"));
     mockSendViaLogProvider.mockClear();
     mockLogger.error.mockClear();
 
-    await sendTransactionalEmail({
-      to: "user@example.com",
-      subject: "Reset password",
-      text: "https://example.com/reset",
-    });
+    await expect(
+      sendTransactionalEmail(
+        {
+          to: "user@example.com",
+          subject: "Reset password",
+          text: "https://example.com/reset",
+        },
+        { throwOnError: true },
+      ),
+    ).rejects.toThrow("SMTP down");
 
     expect(mockLogger.error).toHaveBeenCalled();
-    expect(mockSendViaLogProvider).toHaveBeenCalled();
+    expect(mockSendViaLogProvider).not.toHaveBeenCalled();
   });
 });

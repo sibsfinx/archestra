@@ -1325,9 +1325,9 @@ describe("parseOutboundMailProvider", () => {
     expect(parseOutboundMailProvider()).toBe("log");
   });
 
-  test("returns brevo when configured", () => {
-    process.env.ARCHESTRA_MAIL_PROVIDER = "brevo";
-    expect(parseOutboundMailProvider()).toBe("brevo");
+  test("returns smtp when configured", () => {
+    process.env.ARCHESTRA_MAIL_PROVIDER = "smtp";
+    expect(parseOutboundMailProvider()).toBe("smtp");
   });
 
   test("returns capture when configured", () => {
@@ -1342,12 +1342,12 @@ describe("parseOutboundMailProvider", () => {
 
   test("returns log for unknown providers even under vitest", () => {
     process.env.VITEST = "true";
-    process.env.ARCHESTRA_MAIL_PROVIDER = "smtp";
+    process.env.ARCHESTRA_MAIL_PROVIDER = "brevo";
     expect(parseOutboundMailProvider()).toBe("log");
   });
 
   test("returns log for unknown providers", () => {
-    process.env.ARCHESTRA_MAIL_PROVIDER = "smtp";
+    process.env.ARCHESTRA_MAIL_PROVIDER = "brevo";
     expect(parseOutboundMailProvider()).toBe("log");
   });
 });

@@ -10,4 +10,4 @@ export type TransactionalEmail = {
   html?: string;
 };
 
-export type MailProviderType = "log" | "brevo" | "capture";
+export type MailProviderType = "log" | "smtp" | "capture";
