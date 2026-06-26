@@ -19,7 +19,7 @@ re-attach the schema entry.
 Ground truth for the verifier is written alongside as expected/rows.json (the canonical rows as
 data). The verifier recomputes the aggregate from that, never from the broken binary.
 
-Run:  uv run tasks/sqlite-orders/expected/build_fixture.py
+Run:  uv run tasks/sqlite-orders/expected/generate.py
 """
 
 from __future__ import annotations
