@@ -49,6 +49,10 @@ import {
   tools as llmProxyTools,
 } from "./llm-proxies";
 import {
+  toolEntries as memoryToolEntries,
+  tools as memoryTools,
+} from "./memory";
+import {
   toolEntries as mcpGatewayToolEntries,
   tools as mcpGatewayTools,
 } from "./mcp-gateways";
@@ -98,6 +102,7 @@ const toolEntries: Partial<
   ...policyToolEntries,
   ...toolAssignmentToolEntries,
   ...knowledgeManagementToolEntries,
+  ...memoryToolEntries,
   ...chatToolEntries,
   ...searchToolEntries,
   ...runToolEntries,
@@ -136,6 +141,7 @@ export function getArchestraMcpTools() {
     ...policyTools,
     ...toolAssignmentTools,
     ...knowledgeManagementTools,
+    ...memoryTools,
     ...chatTools,
     ...searchToolTools,
     ...runToolTools,

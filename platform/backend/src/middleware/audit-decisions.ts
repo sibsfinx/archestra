@@ -135,6 +135,12 @@ export const AUDIT_DECISIONS = {
     reason: "audit table itself; auditing its mutations would recurse",
   },
 
+  memoriesTable: {
+    audited: false,
+    reason:
+      "memory mutations audited inline in /api/memory routes and the MCP memory tool",
+  },
+
   // =========================================================================
   // Invitation lifecycle — audited via better-auth inline writes
   // (invitation.created, invitation.deleted); no AUDITABLE_ROUTES entry

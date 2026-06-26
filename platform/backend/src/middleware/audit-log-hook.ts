@@ -248,6 +248,7 @@ const AUDIT_DENYLIST: readonly AuditDenylistEntry[] = [
   // do not mutate org state — exclude them to avoid false-positive audit noise.
   { kind: "exact", value: "/api/skills/github/discover" },
   { kind: "exact", value: "/api/skills/github/preview" },
+  { kind: "prefix", value: "/api/memory" },
 ];
 
 function isDenylisted(url: string): boolean {

@@ -34,6 +34,7 @@ enum ToolGroup {
   Skills = "Skills",
   SkillSandbox = "Skill Sandbox",
   Apps = "Apps",
+  Memory = "Memory",
 }
 
 const groupOrder: Record<ToolGroup, number> = {
@@ -52,6 +53,7 @@ const groupOrder: Record<ToolGroup, number> = {
   [ToolGroup.Skills]: 12,
   [ToolGroup.SkillSandbox]: 13,
   [ToolGroup.Apps]: 14,
+  [ToolGroup.Memory]: 15,
 };
 
 /**
@@ -165,6 +167,7 @@ const toolGroups: Record<ArchestraToolShortName, ToolGroup> = {
   app_data_list: ToolGroup.Apps,
   app_data_delete: ToolGroup.Apps,
   llm_complete: ToolGroup.Apps,
+  memory: ToolGroup.Memory,
 };
 
 // === Script entry point ===

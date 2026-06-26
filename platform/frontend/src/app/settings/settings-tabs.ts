@@ -24,6 +24,9 @@ export function useSettingsTabs() {
     ...(permissionMap?.["/settings/knowledge"]
       ? [{ label: "Knowledge", href: "/settings/knowledge" }]
       : []),
+    ...(permissionMap?.["/settings/memory"]
+      ? [{ label: "Memory", href: "/settings/memory" }]
+      : []),
     ...(permissionMap?.["/settings/environments"]
       ? [{ label: "Environments", href: "/settings/environments" }]
       : []),

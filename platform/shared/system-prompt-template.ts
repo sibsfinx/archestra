@@ -1,6 +1,7 @@
 import { BUILT_IN_AGENT_IDS } from "./built-in-agents";
 
 const USER_SYSTEM_PROMPT_CONTEXT_KEY = "user";
+const MEMORIES_SYSTEM_PROMPT_CONTEXT_KEY = "memories";
 const POLICY_CONFIG_TOOL_CONTEXT_KEY = "tool";
 const toTemplateExpression = (path: string) => `{{${path}}}`;
 
@@ -8,12 +9,14 @@ export const SYSTEM_PROMPT_VARIABLE_PATHS = {
   userName: `${USER_SYSTEM_PROMPT_CONTEXT_KEY}.name`,
   userEmail: `${USER_SYSTEM_PROMPT_CONTEXT_KEY}.email`,
   userTeams: `${USER_SYSTEM_PROMPT_CONTEXT_KEY}.teams`,
+  memories: MEMORIES_SYSTEM_PROMPT_CONTEXT_KEY,
 } as const;
 
 export const SYSTEM_PROMPT_VARIABLE_EXPRESSIONS = {
   userName: toTemplateExpression(SYSTEM_PROMPT_VARIABLE_PATHS.userName),
   userEmail: toTemplateExpression(SYSTEM_PROMPT_VARIABLE_PATHS.userEmail),
   userTeams: toTemplateExpression(SYSTEM_PROMPT_VARIABLE_PATHS.userTeams),
+  memories: toTemplateExpression(SYSTEM_PROMPT_VARIABLE_PATHS.memories),
 } as const;
 
 /**
@@ -33,6 +36,11 @@ export const SYSTEM_PROMPT_VARIABLES = [
   {
     expression: SYSTEM_PROMPT_VARIABLE_EXPRESSIONS.userTeams,
     description: "Team names the user belongs to (array)",
+  },
+  {
+    expression: SYSTEM_PROMPT_VARIABLE_EXPRESSIONS.memories,
+    description:
+      "Core memories visible to the user (personal, team, and org scope; array of { content })",
   },
 ] as const;
 
@@ -132,18 +140,24 @@ export function buildPolicyConfigSystemPromptContext(params: {
   };
 }
 
+export interface SystemPromptMemoryItem {
+  content: string;
+}
+
 export interface UserSystemPromptContext {
   user: {
     name: string;
     email: string;
     teams: string[];
   };
+  memories?: SystemPromptMemoryItem[];
 }
 
 export function buildUserSystemPromptContext(params: {
   userName: string;
   userEmail: string;
   userTeams: string[];
+  memories?: SystemPromptMemoryItem[];
 }): UserSystemPromptContext {
   return {
     [USER_SYSTEM_PROMPT_CONTEXT_KEY]: {
@@ -151,6 +165,9 @@ export function buildUserSystemPromptContext(params: {
       email: params.userEmail,
       teams: params.userTeams,
     },
+    ...(params.memories !== undefined && {
+      [MEMORIES_SYSTEM_PROMPT_CONTEXT_KEY]: params.memories,
+    }),
   };
 }
 

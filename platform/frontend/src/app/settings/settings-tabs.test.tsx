@@ -128,6 +128,34 @@ describe("useSettingsTabs", () => {
     });
   });
 
+  it("shows Memory tab when user has memory:read permission", async () => {
+    mockPermissions = {
+      memory: ["read"],
+    };
+
+    const { result } = renderHook(() => useSettingsTabs(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      const labels = getTabLabels(result.current);
+      expect(labels).toContain("Memory");
+    });
+  });
+
+  it("hides Memory tab when user lacks memory:read permission", async () => {
+    mockPermissions = {};
+
+    const { result } = renderHook(() => useSettingsTabs(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      const labels = getTabLabels(result.current);
+      expect(labels).not.toContain("Memory");
+    });
+  });
+
   it("shows Service Accounts tab when user has serviceAccount:read permission", async () => {
     mockPermissions = {
       serviceAccount: ["read"],

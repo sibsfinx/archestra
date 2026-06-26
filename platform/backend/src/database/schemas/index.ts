@@ -115,6 +115,7 @@ export { default as mcpServerInstallationRequestsTable } from "./mcp-server-inst
 export { default as mcpServerUsersTable } from "./mcp-server-user";
 export { default as mcpToolCallsTable } from "./mcp-tool-call";
 export { default as membersTable } from "./member";
+export { default as memoriesTable } from "./memory";
 export { default as messagesTable } from "./message";
 export { default as modelsTable } from "./model";
 export { default as oauthAccessTokensTable } from "./oauth-access-token";

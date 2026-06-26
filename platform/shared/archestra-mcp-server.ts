@@ -111,6 +111,7 @@ export const TOOL_SEARCH_TOOLS_SHORT_NAME = "search_tools";
 export const TOOL_RUN_TOOL_SHORT_NAME = "run_tool";
 export const TOOL_LIST_SKILLS_SHORT_NAME = "list_skills";
 export const TOOL_LOAD_SKILL_SHORT_NAME = "load_skill";
+export const TOOL_MEMORY_SHORT_NAME = "memory";
 export const TOOL_CREATE_SKILL_SHORT_NAME = "create_skill";
 export const TOOL_UPDATE_SKILL_SHORT_NAME = "update_skill";
 // code execution sandbox — implicit per-conversation sandbox; the create step
@@ -208,6 +209,7 @@ export const ARCHESTRA_TOOL_SHORT_NAMES = [
   TOOL_RUN_TOOL_SHORT_NAME,
   TOOL_LIST_SKILLS_SHORT_NAME,
   TOOL_LOAD_SKILL_SHORT_NAME,
+  TOOL_MEMORY_SHORT_NAME,
   TOOL_CREATE_SKILL_SHORT_NAME,
   TOOL_UPDATE_SKILL_SHORT_NAME,
   TOOL_RUN_COMMAND_SHORT_NAME,
@@ -377,6 +379,8 @@ export const TOOL_LIST_SKILLS_FULL_NAME =
   `${ARCHESTRA_TOOL_PREFIX}${TOOL_LIST_SKILLS_SHORT_NAME}` as const;
 export const TOOL_LOAD_SKILL_FULL_NAME =
   `${ARCHESTRA_TOOL_PREFIX}${TOOL_LOAD_SKILL_SHORT_NAME}` as const;
+export const TOOL_MEMORY_FULL_NAME =
+  `${ARCHESTRA_TOOL_PREFIX}${TOOL_MEMORY_SHORT_NAME}` as const;
 export const TOOL_CREATE_SKILL_FULL_NAME =
   `${ARCHESTRA_TOOL_PREFIX}${TOOL_CREATE_SKILL_SHORT_NAME}` as const;
 export const TOOL_UPDATE_SKILL_FULL_NAME =

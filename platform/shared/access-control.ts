@@ -54,6 +54,7 @@ export const allAvailableActions: Record<Resource, Action[]> = {
 
   // Knowledge
   knowledgeSource: ["read", "create", "update", "delete", "query", "admin"],
+  memory: ["read", "create", "update", "delete", "team-admin", "admin"],
 
   // Other
   chat: ["read", "create", "update", "delete"],
@@ -119,6 +120,7 @@ export const editorPermissions: Record<Resource, Action[]> = {
 
   // Knowledge
   knowledgeSource: ["read", "create", "update", "delete", "query"],
+  memory: ["read", "create", "update", "delete", "team-admin"],
 
   // Other
   chat: ["read", "create", "update", "delete"],
@@ -190,6 +192,7 @@ export const memberPermissions: Record<Resource, Action[]> = {
 
   // Knowledge
   knowledgeSource: ["read", "query"],
+  memory: ["read", "create", "update", "delete"],
 
   // Other
   chat: ["read", "create", "update", "delete"],
@@ -429,6 +432,12 @@ export const permissionDescriptions: Record<string, string> = {
     "View knowledge settings (embedding and reranking models)",
   "knowledgeSettings:update":
     "Modify knowledge settings (embedding and reranking models)",
+  "memory:read": "View memory entries within your scope",
+  "memory:create": "Create memory entries within your scope",
+  "memory:update": "Update memory entries within your scope",
+  "memory:delete": "Delete memory entries within your scope",
+  "memory:team-admin": "Manage team-scoped memory entries in your teams",
+  "memory:admin": "Manage organization-scoped memory and bypass scope restrictions",
 
   // UI behavior
   "simpleView:enable": "Sidebar is collapsed by default on page load",
@@ -1289,6 +1298,12 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.GetConnectorRuns]: { knowledgeSource: ["read"] },
   [RouteId.GetConnectorRun]: { knowledgeSource: ["read"] },
 
+  // Memory Routes - per-instance scope is enforced in the handlers
+  [RouteId.GetMemories]: { memory: ["read"] },
+  [RouteId.CreateMemory]: { memory: ["create"] },
+  [RouteId.UpdateMemory]: { memory: ["update"] },
+  [RouteId.DeleteMemory]: { memory: ["delete"] },
+
   // Agent Skill Routes - per-instance scope is enforced in the handlers
   [RouteId.GetSkills]: { skill: ["read"] },
   [RouteId.CreateSkill]: { skill: ["create"] },
@@ -1472,6 +1487,7 @@ export const requiredPagePermissionsMap: Record<string, Permissions> = {
   "/settings/agents": { agentSettings: ["read"] },
   "/settings/environments": { environment: ["admin"] },
   "/settings/knowledge": { knowledgeSettings: ["read"] },
+  "/settings/memory": { memory: ["read"] },
   "/settings/users": { member: ["read"] },
   "/settings/teams": { team: ["read"] },
   "/settings/roles": { ac: ["read"] },

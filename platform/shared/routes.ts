@@ -609,6 +609,12 @@ export const RouteId = {
   PostAppRenderScreenshot: "postAppRenderScreenshot",
   // Frontend session-based proxy to the app-bound MCP server (chat + standalone)
   McpAppProxyPost: "mcpAppProxyPost",
+
+  // Memory Routes
+  GetMemories: "getMemories",
+  CreateMemory: "createMemory",
+  UpdateMemory: "updateMemory",
+  DeleteMemory: "deleteMemory",
 } as const;
 
 export type RouteId = (typeof RouteId)[keyof typeof RouteId];

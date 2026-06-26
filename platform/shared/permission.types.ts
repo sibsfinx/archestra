@@ -38,6 +38,7 @@ export const resources = [
   "mcpServerInstallation",
   "knowledgeSource",
   "knowledgeSettings",
+  "memory",
   "mcpServerInstallationRequest",
   "environment",
   "githubAppConfig",
@@ -103,6 +104,7 @@ export const resourceLabels: Record<Resource, string> = {
   mcpServerInstallation: "MCP Server Installations",
   knowledgeSource: "Knowledge Sources",
   knowledgeSettings: "Knowledge Settings",
+  memory: "Memory",
   mcpServerInstallationRequest: "MCP Server Installation Requests",
   environment: "Environments",
   githubAppConfig: "GitHub App Configurations",
@@ -181,6 +183,8 @@ export const resourceDescriptions: Record<Resource, string> = {
     "Knowledge sources including knowledge bases and connectors for RAG-based document retrieval",
   knowledgeSettings:
     "Knowledge settings (embedding and reranking models configuration)",
+  memory:
+    "Durable agent memory entries (personal, team, and organization scopes)",
   simpleView: "Controls if the simple view of the app is enabled",
   chatAgentPicker: "Controls visibility of the agent picker in chat",
   chatProviderSettings:
@@ -231,7 +235,7 @@ export const resourceCategories: Record<string, Resource[]> = {
     "llmSettings",
     "llmCost",
   ],
-  Knowledge: ["knowledgeSource", "knowledgeSettings"],
+  Knowledge: ["knowledgeSource", "knowledgeSettings", "memory"],
   Other: [
     "chat",
     "project",

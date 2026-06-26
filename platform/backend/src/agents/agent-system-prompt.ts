@@ -1,5 +1,6 @@
 import {
   buildUserSystemPromptContext,
+  SYSTEM_PROMPT_VARIABLE_EXPRESSIONS,
   TOOL_LOAD_SKILL_SHORT_NAME,
   TOOL_RUN_COMMAND_SHORT_NAME,
   TOOL_RUN_TOOL_SHORT_NAME,
@@ -7,7 +8,8 @@ import {
 } from "@archestra/shared";
 import type { Tool } from "ai";
 import { archestraMcpBranding } from "@/archestra-mcp-server";
-import { TeamModel, UserModel } from "@/models";
+import { MAX_CORE_ITEMS_PER_SCOPE } from "@/archestra-mcp-server/memory";
+import { MemoryModel, TeamModel, UserModel } from "@/models";
 import { buildSkillCatalogPrompt } from "@/skills/skill-catalog-prompt";
 import { isSkillSandboxAvailableForAgent } from "@/skills/skill-sandbox-availability";
 import {
@@ -131,14 +133,32 @@ async function renderAgentPrompt(params: {
   // Build template context only when prompts use Handlebars syntax.
   let promptContext: UserSystemPromptContext | null = null;
   if (promptNeedsRendering(systemPrompt)) {
-    const [resolvedUser, userTeams] = await Promise.all([
+    const needsMemories = systemPrompt?.includes(
+      SYSTEM_PROMPT_VARIABLE_EXPRESSIONS.memories,
+    );
+
+    const [resolvedUser, userTeams, teamIds] = await Promise.all([
       user ?? UserModel.getById(userId),
       TeamModel.getUserTeamsForOrganization({ userId, organizationId }),
+      needsMemories ? TeamModel.getUserTeamIds(userId) : Promise.resolve([]),
     ]);
+
+    const memories = needsMemories
+      ? (
+          await MemoryModel.listCoreForInjection({
+            organizationId,
+            userId,
+            teamIds,
+            limit: MAX_CORE_ITEMS_PER_SCOPE,
+          })
+        ).map((memory) => ({ content: memory.content }))
+      : undefined;
+
     promptContext = buildUserSystemPromptContext({
       userName: resolvedUser?.name ?? "",
       userEmail: resolvedUser?.email ?? "",
       userTeams: userTeams.map((t) => t.name),
+      memories,
     });
   }
 

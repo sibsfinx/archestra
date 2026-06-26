@@ -1,8 +1,14 @@
-import { ADMIN_ROLE_NAME, TOOL_LOAD_SKILL_SHORT_NAME } from "@archestra/shared";
+import {
+  ADMIN_ROLE_NAME,
+  SYSTEM_PROMPT_VARIABLE_EXPRESSIONS,
+  TOOL_LOAD_SKILL_SHORT_NAME,
+} from "@archestra/shared";
 import type { Tool } from "ai";
+import db, { schema } from "@/database";
 import { archestraMcpBranding } from "@/archestra-mcp-server";
-import { SkillModel } from "@/models";
-import { describe, expect, test } from "@/test";
+import { MemoryModel, SkillModel } from "@/models";
+import { describe, expect, test, vi } from "@/test";
+import type { InsertMemory } from "@/types";
 import {
   buildAgentSystemPrompt,
   PROJECT_INSTRUCTIONS_PREFIX,
@@ -53,6 +59,136 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toBe(`You are helpful.\n\n${TOOL_DENIAL_INSTRUCTION}`);
+  });
+
+  test("does not query memories when the prompt omits {{memories}}", async ({
+    makeAgent,
+    makeUser,
+    makeMember,
+  }) => {
+    const listCoreForInjectionSpy = vi.spyOn(
+      MemoryModel,
+      "listCoreForInjection",
+    );
+
+    const agent = await makeAgent({
+      systemPrompt: "Hi {{user.name}}.",
+      toolExposureMode: "full",
+    });
+    const user = await makeUser();
+    await makeMember(user.id, agent.organizationId);
+
+    await buildAgentSystemPrompt({
+      agent,
+      mcpTools: {},
+      organizationId: agent.organizationId,
+      userId: user.id,
+      agentId: agent.id,
+    });
+
+    expect(listCoreForInjectionSpy).not.toHaveBeenCalled();
+    listCoreForInjectionSpy.mockRestore();
+  });
+
+  test("injects only readable core memories and excludes foreign scopes and archival", async ({
+    makeAgent,
+    makeUser,
+    makeMember,
+    makeTeam,
+    makeTeamMember,
+  }) => {
+    const agent = await makeAgent({
+      systemPrompt:
+        `Facts ${SYSTEM_PROMPT_VARIABLE_EXPRESSIONS.memories}: ` +
+        "{{#each memories}}{{content}};{{/each}}",
+      toolExposureMode: "full",
+    });
+    const actingUser = await makeUser();
+    const otherUser = await makeUser();
+    await makeMember(actingUser.id, agent.organizationId);
+    await makeMember(otherUser.id, agent.organizationId);
+
+    const memberTeam = await makeTeam(agent.organizationId, actingUser.id, {
+      name: "Member Team",
+    });
+    const foreignTeam = await makeTeam(agent.organizationId, otherUser.id, {
+      name: "Foreign Team",
+    });
+    await makeTeamMember(memberTeam.id, actingUser.id);
+
+    const seed = async (values: InsertMemory) => {
+      await db.insert(schema.memoriesTable).values(values);
+    };
+
+    await seed({
+      organizationId: agent.organizationId,
+      visibility: "personal",
+      userId: actingUser.id,
+      teamId: null,
+      content: "own-personal-core",
+      tier: "core",
+      createdBy: actingUser.id,
+    });
+    await seed({
+      organizationId: agent.organizationId,
+      visibility: "personal",
+      userId: actingUser.id,
+      teamId: null,
+      content: "own-personal-archival",
+      tier: "archival",
+      createdBy: actingUser.id,
+    });
+    await seed({
+      organizationId: agent.organizationId,
+      visibility: "personal",
+      userId: otherUser.id,
+      teamId: null,
+      content: "foreign-personal-core",
+      tier: "core",
+      createdBy: otherUser.id,
+    });
+    await seed({
+      organizationId: agent.organizationId,
+      visibility: "team",
+      userId: null,
+      teamId: memberTeam.id,
+      content: "member-team-core",
+      tier: "core",
+      createdBy: actingUser.id,
+    });
+    await seed({
+      organizationId: agent.organizationId,
+      visibility: "team",
+      userId: null,
+      teamId: foreignTeam.id,
+      content: "foreign-team-core",
+      tier: "core",
+      createdBy: otherUser.id,
+    });
+    await seed({
+      organizationId: agent.organizationId,
+      visibility: "org",
+      userId: null,
+      teamId: null,
+      content: "org-core-fact",
+      tier: "core",
+      createdBy: actingUser.id,
+    });
+
+    const prompt = await buildAgentSystemPrompt({
+      agent,
+      mcpTools: {},
+      organizationId: agent.organizationId,
+      userId: actingUser.id,
+      agentId: agent.id,
+    });
+
+    expect(prompt).toContain("own-personal-core;");
+    expect(prompt).toContain("member-team-core;");
+    expect(prompt).toContain("org-core-fact;");
+    expect(prompt).not.toContain("own-personal-archival");
+    expect(prompt).not.toContain("foreign-personal-core");
+    expect(prompt).not.toContain("foreign-team-core");
   });
 
   test("renders Handlebars user context from a fetched user and their teams", async ({
