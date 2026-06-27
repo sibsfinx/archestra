@@ -447,6 +447,15 @@ async function updatePersonalMemory(
     return errorResult(updated.error);
   }
 
+  logger.info(
+    {
+      organizationId: ctx.organizationId,
+      userId: ctx.userId,
+      memoryId: updated.row.id,
+    },
+    "[Memory] Personal memory updated",
+  );
+
   return structuredSuccessResult(
     { memory: formatMemory(updated.row) },
     `Updated memory ${updated.row.id}.`,
@@ -508,6 +517,15 @@ async function deletePersonalMemory(
   if (!deleted) {
     return errorResult("Failed to delete memory.");
   }
+
+  logger.info(
+    {
+      organizationId: ctx.organizationId,
+      userId: ctx.userId,
+      memoryId: existing.id,
+    },
+    "[Memory] Personal memory deleted",
+  );
 
   return successResult(`Deleted memory ${existing.id}.`);
 }

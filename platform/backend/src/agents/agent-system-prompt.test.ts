@@ -6,6 +6,7 @@ import {
 import type { Tool } from "ai";
 import db, { schema } from "@/database";
 import { archestraMcpBranding } from "@/archestra-mcp-server";
+import logger from "@/logging";
 import { MemoryModel, SkillModel } from "@/models";
 import { describe, expect, test, vi } from "@/test";
 import type { InsertMemory } from "@/types";
@@ -15,6 +16,15 @@ import {
   TOOL_DENIAL_INSTRUCTION,
   TOOL_UI_RESULT_INSTRUCTION,
 } from "./agent-system-prompt";
+
+vi.mock("@/logging", () => ({
+  default: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
 
 const loadSkillToolName = archestraMcpBranding.getToolName(
   TOOL_LOAD_SKILL_SHORT_NAME,
@@ -38,6 +48,10 @@ async function seedSkill(organizationId: string) {
 }
 
 describe("buildAgentSystemPrompt", () => {
+  beforeEach(() => {
+    vi.mocked(logger.info).mockClear();
+  });
+
   test("passes the base prompt through and always appends the denial instruction", async ({
     makeAgent,
     makeUser,
@@ -87,6 +101,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(listCoreForInjectionSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(logger.info)).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "[Memory] Core memories loaded for prompt injection",
+    );
     listCoreForInjectionSpy.mockRestore();
   });
 
@@ -189,6 +207,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("own-personal-archival");
     expect(prompt).not.toContain("foreign-personal-core");
     expect(prompt).not.toContain("foreign-team-core");
+
+    expect(vi.mocked(logger.info)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: agent.organizationId,
+        userId: actingUser.id,
+        memoryCount: 3,
+        memoryIds: expect.arrayContaining([
+          expect.any(String),
+          expect.any(String),
+          expect.any(String),
+        ]),
+      }),
+      "[Memory] Core memories loaded for prompt injection",
+    );
   });
 
   test("renders Handlebars user context from a fetched user and their teams", async ({

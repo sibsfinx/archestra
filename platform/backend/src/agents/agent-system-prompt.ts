@@ -9,6 +9,7 @@ import {
 import type { Tool } from "ai";
 import { archestraMcpBranding } from "@/archestra-mcp-server";
 import { MAX_CORE_ITEMS_PER_SCOPE } from "@/archestra-mcp-server/memory";
+import logger from "@/logging";
 import { MemoryModel, TeamModel, UserModel } from "@/models";
 import { buildSkillCatalogPrompt } from "@/skills/skill-catalog-prompt";
 import { isSkillSandboxAvailableForAgent } from "@/skills/skill-sandbox-availability";
@@ -133,9 +134,9 @@ async function renderAgentPrompt(params: {
   // Build template context only when prompts use Handlebars syntax.
   let promptContext: UserSystemPromptContext | null = null;
   if (promptNeedsRendering(systemPrompt)) {
-    const needsMemories = systemPrompt?.includes(
-      SYSTEM_PROMPT_VARIABLE_EXPRESSIONS.memories,
-    );
+    const needsMemories =
+      systemPrompt?.includes(SYSTEM_PROMPT_VARIABLE_EXPRESSIONS.memories) ||
+      systemPrompt?.includes("#each memories") === true;
 
     const [resolvedUser, userTeams, teamIds] = await Promise.all([
       user ?? UserModel.getById(userId),
@@ -143,15 +144,29 @@ async function renderAgentPrompt(params: {
       needsMemories ? TeamModel.getUserTeamIds(userId) : Promise.resolve([]),
     ]);
 
+    const coreMemories = needsMemories
+      ? await MemoryModel.listCoreForInjection({
+          organizationId,
+          userId,
+          teamIds,
+          limit: MAX_CORE_ITEMS_PER_SCOPE,
+        })
+      : [];
+
+    if (needsMemories) {
+      logger.info(
+        {
+          organizationId,
+          userId,
+          memoryCount: coreMemories.length,
+          memoryIds: coreMemories.map((memory) => memory.id),
+        },
+        "[Memory] Core memories loaded for prompt injection",
+      );
+    }
+
     const memories = needsMemories
-      ? (
-          await MemoryModel.listCoreForInjection({
-            organizationId,
-            userId,
-            teamIds,
-            limit: MAX_CORE_ITEMS_PER_SCOPE,
-          })
-        ).map((memory) => ({ content: memory.content }))
+      ? coreMemories.map((memory) => ({ content: memory.content }))
       : undefined;
 
     promptContext = buildUserSystemPromptContext({
