@@ -25560,6 +25560,7 @@ export type GetConfigResponses = {
             maintenanceMode: string | null;
             chatSecretScanEnabled: boolean;
             agentHooksEnabled: boolean;
+            memoryEnabled: boolean;
         };
         providerBaseUrls: {
             [key: string]: string | null;
@@ -51092,6 +51093,7 @@ export type GetOrganizationResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 
@@ -51385,6 +51387,7 @@ export type UpdateAppearanceSettingsResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 
@@ -51400,6 +51403,21 @@ export type UpdateSecuritySettingsData = {
     query?: never;
     url: '/api/organization/security-settings';
 };
+
+export type UpdateMemorySettingsData = {
+    body: {
+        memoryEnabled: boolean;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/organization/memory-settings';
+};
+
+export type UpdateMemorySettingsErrors = UpdateSecuritySettingsErrors;
+
+export type UpdateMemorySettingsResponses = UpdateSecuritySettingsResponses;
+
+export type UpdateMemorySettingsResponse = UpdateMemorySettingsResponses[keyof UpdateMemorySettingsResponses];
 
 export type UpdateSecuritySettingsErrors = {
     /**
@@ -51550,6 +51568,7 @@ export type UpdateSecuritySettingsResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 
@@ -51714,6 +51733,7 @@ export type UpdateLlmSettingsResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 
@@ -51880,6 +51900,7 @@ export type UpdateAgentSettingsResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 
@@ -52056,6 +52077,7 @@ export type UpdateConnectionSettingsResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 
@@ -52229,6 +52251,7 @@ export type UpdateDefaultEnvironmentResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 
@@ -52393,6 +52416,7 @@ export type UpdateAuthSettingsResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 
@@ -52559,6 +52583,7 @@ export type UpdateKnowledgeSettingsResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 
@@ -52720,6 +52745,7 @@ export type DropEmbeddingConfigResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 
@@ -52970,6 +52996,7 @@ export type CompleteOnboardingResponses = {
         defaultEnvironmentValidationRegex: string | null;
         skillToolsEnabled: boolean;
         skillSlashCommandsEnabled: boolean;
+        memoryEnabled: boolean;
     };
 };
 

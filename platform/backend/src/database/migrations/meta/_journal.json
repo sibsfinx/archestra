@@ -2171,6 +2171,13 @@
       "when": 1782328502529,
       "tag": "0309_nosy_namora",
       "breakpoints": true
+    },
+    {
+      "idx": 310,
+      "version": "7",
+      "when": 1782410000000,
+      "tag": "0310_organization_memory_enabled",
+      "breakpoints": true
     }
   ]
 }

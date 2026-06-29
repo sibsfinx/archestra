@@ -6,6 +6,7 @@ import {
 } from "@archestra/shared";
 import { count, eq } from "drizzle-orm";
 import db, { schema } from "@/database";
+import { OrganizationModel } from "@/models";
 import type { InsertMemory } from "@/types";
 import { beforeEach, describe, expect, test } from "@/test";
 import type { Agent } from "@/types";
@@ -434,5 +435,38 @@ describe("memory tool execution", () => {
     );
     expect(deleteResult.isError).toBeTruthy();
     expect(textOf(deleteResult)).toContain("memory:delete");
+  });
+
+  test("rejects execution when org durable memory is disabled", async () => {
+    await OrganizationModel.patch(organizationId, { memoryEnabled: false });
+
+    await expect(
+      executeArchestraTool(
+        t(TOOL_MEMORY_SHORT_NAME),
+        { command: "view" },
+        context,
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("No tool named"),
+    });
+  });
+
+  test("rejects assigned-agent execution when org durable memory is disabled", async () => {
+    await OrganizationModel.patch(organizationId, { memoryEnabled: false });
+
+    const agentContext: ArchestraContext = {
+      ...context,
+      agentId: agent.id,
+    };
+
+    await expect(
+      executeArchestraTool(
+        t(TOOL_MEMORY_SHORT_NAME),
+        { command: "view" },
+        agentContext,
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("No tool named"),
+    });
   });
 });

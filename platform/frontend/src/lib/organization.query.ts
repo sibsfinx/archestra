@@ -361,6 +361,37 @@ export function useUpdateAppearanceSettings(
 }
 
 /**
+ * Update durable memory settings for the organization
+ */
+export function useUpdateMemorySettings(
+  onSuccessMessage: string,
+  onErrorMessage: string,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      data: archestraApiTypes.UpdateMemorySettingsData["body"],
+    ) => {
+      const { data: updatedOrganization, error } =
+        await archestraApiSdk.updateMemorySettings({ body: data });
+
+      if (error) {
+        toast.error(onErrorMessage);
+        return null;
+      }
+
+      return updatedOrganization;
+    },
+    onSuccess: (updatedOrganization) => {
+      if (!updatedOrganization) return;
+      queryClient.setQueryData(organizationKeys.details(), updatedOrganization);
+      queryClient.invalidateQueries({ queryKey: ["config"] });
+      toast.success(onSuccessMessage);
+    },
+  });
+}
+
+/**
  * Update security settings (global tool policy, chat file uploads)
  */
 export function useUpdateSecuritySettings(

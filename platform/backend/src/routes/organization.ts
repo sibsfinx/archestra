@@ -48,6 +48,7 @@ import {
   UpdateDefaultEnvironmentSchema,
   UpdateKnowledgeSettingsSchema,
   UpdateLlmSettingsSchema,
+  UpdateMemorySettingsSchema,
   UpdateSecuritySettingsSchema,
 } from "@/types";
 
@@ -140,6 +141,28 @@ const organizationRoutes: FastifyPluginAsyncZod = async (fastify) => {
           "Update security settings (global tool policy, chat file uploads, tool auto-assignment)",
         tags: ["Organization"],
         body: UpdateSecuritySettingsSchema,
+        response: constructResponseSchema(SelectOrganizationSchema),
+      },
+    },
+    async ({ organizationId, body }, reply) => {
+      const organization = await OrganizationModel.patch(organizationId, body);
+
+      if (!organization) {
+        throw new ApiError(404, "Organization not found");
+      }
+
+      return reply.send(organization);
+    },
+  );
+
+  fastify.patch(
+    "/api/organization/memory-settings",
+    {
+      schema: {
+        operationId: RouteId.UpdateMemorySettings,
+        description: "Enable or disable durable memory for the organization",
+        tags: ["Organization"],
+        body: UpdateMemorySettingsSchema,
         response: constructResponseSchema(SelectOrganizationSchema),
       },
     },

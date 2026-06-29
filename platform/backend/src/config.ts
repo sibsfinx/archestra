@@ -1287,6 +1287,14 @@ const config = {
     enabled: betaFeatureEnabled(process.env.ARCHESTRA_PROJECTS_ENABLED),
   },
   /**
+   * Durable agent memory (settings UI, MCP memory tool, {{memories}} prompt
+   * injection). On by default; set ARCHESTRA_MEMORY_ENABLED=false to hide
+   * everywhere.
+   */
+  memory: {
+    enabled: process.env.ARCHESTRA_MEMORY_ENABLED !== "false",
+  },
+  /**
    * Persistent "My Files" byte storage backend. `db` (Postgres bytea, the
    * default) and `filesystem` (a mounted volume / PVC) are co-equal: the active
    * provider is used for new writes while reads dispatch per row, so a

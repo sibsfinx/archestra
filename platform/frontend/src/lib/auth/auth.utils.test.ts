@@ -1,6 +1,10 @@
 import type { Permissions } from "@archestra/shared";
 import { describe, expect, it } from "vitest";
-import { formatMissingPermissions, hasPermissions } from "./auth.utils";
+import {
+  canAccessMemorySettings,
+  formatMissingPermissions,
+  hasPermissions,
+} from "./auth.utils";
 
 describe("hasPermissions", () => {
   it("returns true when no permissions are required", () => {
@@ -48,6 +52,19 @@ describe("hasPermissions", () => {
     };
 
     expect(hasPermissions(userPermissions, required)).toBe(false);
+  });
+});
+
+describe("canAccessMemorySettings", () => {
+  it("allows memory read or admin", () => {
+    expect(canAccessMemorySettings({ memory: ["read"] })).toBe(true);
+    expect(canAccessMemorySettings({ memory: ["admin"] })).toBe(true);
+    expect(canAccessMemorySettings({ memory: ["read", "admin"] })).toBe(true);
+  });
+
+  it("denies when memory actions are missing", () => {
+    expect(canAccessMemorySettings(undefined)).toBe(false);
+    expect(canAccessMemorySettings({ memory: ["create"] })).toBe(false);
   });
 });
 

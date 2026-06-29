@@ -12,6 +12,10 @@ import {
   requireMemoryModifyPermission,
 } from "@/auth/memory-permissions";
 import db, { schema } from "@/database";
+import {
+  assertMemoryEnabledForOrganization,
+  assertMemoryGloballyEnabled,
+} from "@/memory-feature";
 import { MemoryModel, TeamModel } from "@/models";
 import {
   ApiError,
@@ -43,6 +47,13 @@ const UpdateMemoryBodySchema = z.object({
 });
 
 const memoryRoutes: FastifyPluginAsyncZod = async (fastify) => {
+  fastify.addHook("onRequest", async (request) => {
+    assertMemoryGloballyEnabled();
+    if (request.organizationId) {
+      await assertMemoryEnabledForOrganization(request.organizationId);
+    }
+  });
+
   fastify.get(
     "/api/memory",
     {

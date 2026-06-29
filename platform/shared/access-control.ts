@@ -1034,6 +1034,9 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.UpdateSecuritySettings]: {
     agentSettings: ["update"],
   },
+  [RouteId.UpdateMemorySettings]: {
+    memory: ["admin"],
+  },
   [RouteId.UpdateLlmSettings]: {
     llmSettings: ["update"],
   },

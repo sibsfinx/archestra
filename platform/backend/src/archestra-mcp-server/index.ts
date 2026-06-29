@@ -6,6 +6,7 @@ import {
   getArchestraToolShortName,
   isAgentTool,
   PROJECTS_FILE_ARCHESTRA_TOOL_SHORT_NAMES,
+  TOOL_MEMORY_SHORT_NAME,
   TOOL_RUN_TOOL_SHORT_NAME,
   TOOL_SEARCH_TOOLS_SHORT_NAME,
 } from "@archestra/shared";
@@ -13,6 +14,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ZodError, type ZodType } from "zod";
 import config from "@/config";
 import { ToolModel } from "@/models";
+import OrganizationModel from "@/models/organization";
 // Import all groups
 import { toolEntries as agentToolEntries, tools as agentTools } from "./agents";
 import {
@@ -49,10 +51,6 @@ import {
   tools as llmProxyTools,
 } from "./llm-proxies";
 import {
-  toolEntries as memoryToolEntries,
-  tools as memoryTools,
-} from "./memory";
-import {
   toolEntries as mcpGatewayToolEntries,
   tools as mcpGatewayTools,
 } from "./mcp-gateways";
@@ -60,6 +58,10 @@ import {
   toolEntries as mcpServerToolEntries,
   tools as mcpServerTools,
 } from "./mcp-servers";
+import {
+  toolEntries as memoryToolEntries,
+  tools as memoryTools,
+} from "./memory";
 import {
   toolEntries as policyToolEntries,
   tools as policyTools,
@@ -130,6 +132,14 @@ const projectGatedSandboxFullNames = new Set<string>(
   PROJECTS_FILE_ARCHESTRA_TOOL_SHORT_NAMES.map(getArchestraToolFullName),
 );
 
+function isMemoryToolName(toolName: string | undefined): boolean {
+  if (!toolName) {
+    return false;
+  }
+  const shortName = getArchestraToolShortName(toolName);
+  return shortName === TOOL_MEMORY_SHORT_NAME;
+}
+
 export function getArchestraMcpTools() {
   const tools = [
     ...identityTools,
@@ -141,7 +151,7 @@ export function getArchestraMcpTools() {
     ...policyTools,
     ...toolAssignmentTools,
     ...knowledgeManagementTools,
-    ...memoryTools,
+    ...(config.memory.enabled ? memoryTools : []),
     ...chatTools,
     ...searchToolTools,
     ...runToolTools,
@@ -195,6 +205,8 @@ export async function executeArchestraTool(
   // Centralized RBAC check — ensures the user has the required permission
   const rbacDenied = await checkToolPermission(toolName, context);
   if (rbacDenied) return rbacDenied;
+
+  await rejectIfMemoryToolDisabled(toolName, context);
 
   // Centralized assignment check — an agent may only execute Archestra tools
   // that are actually assigned to it (the same set advertised by tools/list and
@@ -335,6 +347,39 @@ function resolveArchestraToolName(toolName: string): string | null {
   }
 
   return getArchestraToolFullName(shortName);
+}
+
+function throwMemoryToolNotFound(toolName: string): never {
+  throw {
+    code: -32601,
+    message: `No tool named "${toolName}" exists. ${toolDiscoverySteer()}`,
+  };
+}
+
+async function rejectIfMemoryToolDisabled(
+  toolName: string,
+  context: ArchestraContext,
+): Promise<void> {
+  const resolvedToolName =
+    toolEntries[toolName as ArchestraToolFullName] != null
+      ? toolName
+      : resolveArchestraToolName(toolName);
+  if (!resolvedToolName || !isMemoryToolName(resolvedToolName)) {
+    return;
+  }
+
+  if (!config.memory.enabled) {
+    throwMemoryToolNotFound(toolName);
+  }
+
+  if (!context.organizationId) {
+    return;
+  }
+
+  const organization = await OrganizationModel.getById(context.organizationId);
+  if (organization?.memoryEnabled !== true) {
+    throwMemoryToolNotFound(toolName);
+  }
 }
 
 function validateToolResult(

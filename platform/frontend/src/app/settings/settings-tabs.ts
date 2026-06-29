@@ -1,12 +1,30 @@
 import { requiredPagePermissionsMap } from "@archestra/shared/access-control";
-import { usePermissionMap } from "@/lib/auth/auth.query";
+import {
+  useAllPermissions,
+  useHasPermissions,
+  usePermissionMap,
+} from "@/lib/auth/auth.query";
+import { canAccessMemorySettings } from "@/lib/auth/auth.utils";
+import { useFeature } from "@/lib/config/config.query";
 import config from "@/lib/config/config";
+import { useOrganization } from "@/lib/organization.query";
 
 import { useSecretsType } from "@/lib/secrets.query";
 
 export function useSettingsTabs() {
   const permissionMap = usePermissionMap(requiredPagePermissionsMap);
+  const { data: userPermissions } = useAllPermissions();
   const { data: secretsType } = useSecretsType();
+  const memoryGloballyEnabled = useFeature("memoryEnabled") ?? true;
+  const { data: organization } = useOrganization();
+  const { data: isMemoryAdmin } = useHasPermissions({ memory: ["admin"] });
+  const memoryOrgEnabled = organization?.memoryEnabled !== false;
+  const canAccessMemory = canAccessMemorySettings(userPermissions);
+  const showMemoryTab =
+    memoryGloballyEnabled &&
+    ((memoryOrgEnabled && canAccessMemory) ||
+      (!memoryOrgEnabled && !!isMemoryAdmin));
+
   return [
     { label: "Your Account", href: "/settings/account" },
     ...(permissionMap?.["/settings/api-keys"]
@@ -24,7 +42,7 @@ export function useSettingsTabs() {
     ...(permissionMap?.["/settings/knowledge"]
       ? [{ label: "Knowledge", href: "/settings/knowledge" }]
       : []),
-    ...(permissionMap?.["/settings/memory"]
+    ...(showMemoryTab
       ? [{ label: "Memory", href: "/settings/memory" }]
       : []),
     ...(permissionMap?.["/settings/environments"]

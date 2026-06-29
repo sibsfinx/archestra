@@ -20,6 +20,7 @@ export function makeOrganization(
     convertToolResultsToToon: false,
     skillToolsEnabled: false,
     skillSlashCommandsEnabled: false,
+    memoryEnabled: true,
     compressionScope: "organization",
     globalToolPolicy: "permissive",
     allowChatFileUploads: false,

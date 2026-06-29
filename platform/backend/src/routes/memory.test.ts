@@ -1,10 +1,12 @@
 import { ADMIN_ROLE_NAME, EDITOR_ROLE_NAME, MEMBER_ROLE_NAME } from "@archestra/shared";
 import { eq } from "drizzle-orm";
+import config from "@/config";
 import db, { schema } from "@/database";
 import {
   DUPLICATE_CONTENT_MESSAGE,
   MAX_CORE_ITEMS_PER_SCOPE,
 } from "@/archestra-mcp-server/memory";
+import { OrganizationModel } from "@/models";
 import type { FastifyInstanceWithZod } from "@/server";
 import { createFastifyInstance } from "@/server";
 import { afterEach, beforeEach, describe, expect, test } from "@/test";
@@ -610,5 +612,51 @@ describe("DELETE /api/memory/:id", () => {
       .from(schema.memoriesTable)
       .where(eq(schema.memoriesTable.id, memory!.id));
     expect(stillThere).toHaveLength(1);
+  });
+});
+
+describe("memory feature gates", () => {
+  let app: FastifyInstanceWithZod;
+  let organizationId: string;
+  let actingUser: User;
+  const originalMemoryEnabled = config.memory.enabled;
+
+  beforeEach(async ({ makeOrganization, makeUser }) => {
+    organizationId = (await makeOrganization()).id;
+    actingUser = await makeUser();
+
+    app = createFastifyInstance();
+    app.addHook("onRequest", async (request) => {
+      Object.assign(request, { user: actingUser, organizationId });
+    });
+    await app.register(memoryRoutes);
+  });
+
+  afterEach(async () => {
+    (config.memory as { enabled: boolean }).enabled = originalMemoryEnabled;
+    await app.close();
+  });
+
+  test("returns 404 when durable memory is globally disabled", async () => {
+    (config.memory as { enabled: boolean }).enabled = false;
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/memory?visibility=personal",
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  test("returns 403 when org durable memory is disabled", async () => {
+    await OrganizationModel.patch(organizationId, { memoryEnabled: false });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/memory?visibility=personal",
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.message).toContain("disabled");
   });
 });

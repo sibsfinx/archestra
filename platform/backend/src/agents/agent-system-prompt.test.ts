@@ -1,3 +1,15 @@
+import { vi } from "vitest";
+
+vi.mock("@/logging", () => ({
+  default: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+  },
+}));
+
 import {
   ADMIN_ROLE_NAME,
   SYSTEM_PROMPT_VARIABLE_EXPRESSIONS,
@@ -8,7 +20,7 @@ import db, { schema } from "@/database";
 import { archestraMcpBranding } from "@/archestra-mcp-server";
 import logger from "@/logging";
 import { MemoryModel, SkillModel } from "@/models";
-import { describe, expect, test, vi } from "@/test";
+import { beforeEach, describe, expect, test } from "@/test";
 import type { InsertMemory } from "@/types";
 import {
   buildAgentSystemPrompt,
@@ -16,15 +28,6 @@ import {
   TOOL_DENIAL_INSTRUCTION,
   TOOL_UI_RESULT_INSTRUCTION,
 } from "./agent-system-prompt";
-
-vi.mock("@/logging", () => ({
-  default: {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  },
-}));
 
 const loadSkillToolName = archestraMcpBranding.getToolName(
   TOOL_LOAD_SKILL_SHORT_NAME,

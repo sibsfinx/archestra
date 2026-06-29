@@ -9,10 +9,22 @@ const mockUseHasPermissions = vi.fn();
 const mockUseMemories = vi.fn();
 const mockUseMyTeams = vi.fn();
 const mockUseTeams = vi.fn();
+const mockUseFeature = vi.fn();
+const mockUseOrganization = vi.fn();
+const mockUseUpdateMemorySettings = vi.fn();
 
 vi.mock("@/lib/auth/auth.query", () => ({
   useHasPermissions: (params: Record<string, string[]>) =>
     mockUseHasPermissions(params),
+}));
+
+vi.mock("@/lib/config/config.query", () => ({
+  useFeature: (flag: string) => mockUseFeature(flag),
+}));
+
+vi.mock("@/lib/organization.query", () => ({
+  useOrganization: () => mockUseOrganization(),
+  useUpdateMemorySettings: () => mockUseUpdateMemorySettings(),
 }));
 
 vi.mock("@/lib/memory.query", () => ({
@@ -55,6 +67,16 @@ describe("MemorySettingsPage", () => {
     mockUseMemories.mockReturnValue({ data: [], isPending: false });
     mockUseMyTeams.mockReturnValue({ data: [] });
     mockUseTeams.mockReturnValue({ data: [] });
+    mockUseFeature.mockImplementation((flag: string) =>
+      flag === "memoryEnabled" ? true : undefined,
+    );
+    mockUseOrganization.mockReturnValue({
+      data: { memoryEnabled: true },
+    });
+    mockUseUpdateMemorySettings.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
     mockUseHasPermissions.mockImplementation(
       (params: Record<string, string[]>) => {
         const granted = permissionMap({ memory: ["read"] });
@@ -128,5 +150,39 @@ describe("MemorySettingsPage", () => {
     renderPage();
 
     expect(screen.getByRole("button", { name: /^add$/i })).toBeInTheDocument();
+  });
+
+  it("shows enable CTA for memory admins when org memory is disabled", () => {
+    mockUseOrganization.mockReturnValue({
+      data: { memoryEnabled: false },
+    });
+    mockUseHasPermissions.mockImplementation(
+      (params: Record<string, string[]>) => {
+        const granted = permissionMap({ memory: ["read", "admin"] });
+        const resource = Object.keys(params)[0];
+        const action = params[resource]?.[0];
+        return {
+          data: !!granted[`${resource}:${action}`],
+          isPending: false,
+        };
+      },
+    );
+
+    renderPage();
+
+    expect(
+      screen.getByRole("button", { name: /enable durable memory/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Personal" })).toBeNull();
+  });
+
+  it("shows deployment unavailable message when memory is globally disabled", () => {
+    mockUseFeature.mockImplementation((flag: string) =>
+      flag === "memoryEnabled" ? false : undefined,
+    );
+
+    renderPage();
+
+    expect(screen.getByText("Not available")).toBeInTheDocument();
   });
 });

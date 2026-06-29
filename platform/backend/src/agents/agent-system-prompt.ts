@@ -123,6 +123,18 @@ export async function buildAgentSystemPrompt(params: {
 
 // ===== Internal helpers =====
 
+async function isMemoryInjectionEnabled(
+  organizationId: string,
+): Promise<boolean> {
+  const { default: runtimeConfig } = await import("@/config");
+  if (!runtimeConfig.memory.enabled) {
+    return false;
+  }
+  const { default: OrganizationModel } = await import("@/models/organization");
+  const organization = await OrganizationModel.getById(organizationId);
+  return organization?.memoryEnabled === true;
+}
+
 async function renderAgentPrompt(params: {
   systemPrompt: string | null;
   organizationId: string;
@@ -144,16 +156,19 @@ async function renderAgentPrompt(params: {
       needsMemories ? TeamModel.getUserTeamIds(userId) : Promise.resolve([]),
     ]);
 
-    const coreMemories = needsMemories
-      ? await MemoryModel.listCoreForInjection({
-          organizationId,
-          userId,
-          teamIds,
-          limit: MAX_CORE_ITEMS_PER_SCOPE,
-        })
-      : [];
+    const memoryEnabled = await isMemoryInjectionEnabled(organizationId);
 
-    if (needsMemories) {
+    const coreMemories =
+      needsMemories && memoryEnabled
+        ? await MemoryModel.listCoreForInjection({
+            organizationId,
+            userId,
+            teamIds,
+            limit: MAX_CORE_ITEMS_PER_SCOPE,
+          })
+        : [];
+
+    if (needsMemories && memoryEnabled) {
       logger.info(
         {
           organizationId,

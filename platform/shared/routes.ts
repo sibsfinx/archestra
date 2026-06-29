@@ -395,6 +395,7 @@ export const RouteId = {
 
   // Security Settings Routes
   UpdateSecuritySettings: "updateSecuritySettings",
+  UpdateMemorySettings: "updateMemorySettings",
 
   // LLM Settings Routes (organization-level)
   UpdateLlmSettings: "updateLlmSettings",

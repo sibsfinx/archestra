@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Brain, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { FormDialog } from "@/components/form-dialog";
@@ -29,6 +29,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useHasPermissions } from "@/lib/auth/auth.query";
+import { useFeature } from "@/lib/config/config.query";
 import {
   type MemoryEntry,
   type MemoryVisibility,
@@ -37,10 +38,42 @@ import {
   useMemories,
   useUpdateMemory,
 } from "@/lib/memory.query";
+import {
+  useOrganization,
+  useUpdateMemorySettings,
+} from "@/lib/organization.query";
 import { useMyTeams, useTeams } from "@/lib/teams/team.query";
 import { formatRelativeTimeFromNow } from "@/lib/utils/date-time";
 
 type MemoryTab = MemoryVisibility;
+
+function MemoryDisabledEmptyState() {
+  const enableMemory = useUpdateMemorySettings(
+    "Durable memory enabled",
+    "Failed to enable durable memory",
+  );
+
+  return (
+    <div className="flex min-h-[50vh] items-center justify-center">
+      <div className="max-w-md text-center">
+        <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl border bg-background shadow-sm">
+          <Brain className="h-7 w-7 text-primary" />
+        </div>
+        <h2 className="mb-2 text-xl font-semibold">Durable memory is off</h2>
+        <p className="mb-6 text-sm text-muted-foreground">
+          Enable durable memory so agents can recall personal, team, and
+          organization facts across conversations.
+        </p>
+        <Button
+          onClick={() => enableMemory.mutate({ memoryEnabled: true })}
+          disabled={enableMemory.isPending}
+        >
+          {enableMemory.isPending ? "Enabling…" : "Enable durable memory"}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function useMemoryWriteAccess(params: {
   visibility: MemoryTab;
@@ -100,15 +133,19 @@ function MemoryScopePanel({
   visibility,
   teamId,
   onTeamIdChange,
+  memoryOrgEnabled,
 }: {
   visibility: MemoryTab;
   teamId: string | null;
   onTeamIdChange: (teamId: string | null) => void;
+  memoryOrgEnabled: boolean;
 }) {
   const { data: canReadMemories, isPending: isCheckingPermissions } =
     useHasPermissions({ memory: ["read"] });
   const { data: isMemoryAdmin } = useHasPermissions({ memory: ["admin"] });
-  const { data: memories = [], isPending } = useMemories(visibility);
+  const { data: memories = [], isPending } = useMemories(visibility, {
+    enabled: memoryOrgEnabled,
+  });
   const { data: myTeams = [] } = useMyTeams({
     enabled: visibility === "team" && !isMemoryAdmin,
   });
@@ -417,6 +454,55 @@ function MemoryScopePanel({
 export default function MemorySettingsPage() {
   const [activeTab, setActiveTab] = useState<MemoryTab>("personal");
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const memoryGloballyEnabled = useFeature("memoryEnabled") ?? true;
+  const { data: organization, isPending: isOrganizationPending } =
+    useOrganization();
+  const { data: isMemoryAdmin, isPending: isCheckingMemoryAdmin } =
+    useHasPermissions({ memory: ["admin"] });
+  const { data: canReadMemories, isPending: isCheckingRead } =
+    useHasPermissions({ memory: ["read"] });
+
+  if (!memoryGloballyEnabled) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Not available</AlertTitle>
+        <AlertDescription>
+          Durable memory is not enabled on this deployment.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (isCheckingMemoryAdmin || isCheckingRead || isOrganizationPending) {
+    return <LoadingSpinner />;
+  }
+
+  if (!canReadMemories && !isMemoryAdmin) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Access denied</AlertTitle>
+        <AlertDescription>
+          You do not have permission to view memory settings.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const memoryOrgEnabled = organization?.memoryEnabled !== false;
+
+  if (!memoryOrgEnabled) {
+    if (!isMemoryAdmin) {
+      return (
+        <Alert variant="destructive">
+          <AlertTitle>Access denied</AlertTitle>
+          <AlertDescription>
+            Durable memory is disabled for this organization.
+          </AlertDescription>
+        </Alert>
+      );
+    }
+    return <MemoryDisabledEmptyState />;
+  }
 
   return (
     <Tabs
@@ -435,6 +521,7 @@ export default function MemorySettingsPage() {
           visibility="personal"
           teamId={null}
           onTeamIdChange={() => {}}
+          memoryOrgEnabled={memoryOrgEnabled}
         />
       </TabsContent>
 
@@ -443,6 +530,7 @@ export default function MemorySettingsPage() {
           visibility="team"
           teamId={selectedTeamId}
           onTeamIdChange={setSelectedTeamId}
+          memoryOrgEnabled={memoryOrgEnabled}
         />
       </TabsContent>
 
@@ -451,6 +539,7 @@ export default function MemorySettingsPage() {
           visibility="org"
           teamId={null}
           onTeamIdChange={() => {}}
+          memoryOrgEnabled={memoryOrgEnabled}
         />
       </TabsContent>
     </Tabs>

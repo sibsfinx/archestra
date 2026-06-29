@@ -1,9 +1,11 @@
-import { TOOL_MEMORY_SHORT_NAME, type Permission } from "@archestra/shared";
+import { type Permission, TOOL_MEMORY_SHORT_NAME } from "@archestra/shared";
 import { and, desc, eq, ilike, inArray, ne, or } from "drizzle-orm";
 import { z } from "zod";
+import config from "@/config";
 import db, { schema } from "@/database";
 import logger from "@/logging";
 import { MemoryModel, TeamModel } from "@/models";
+import OrganizationModel from "@/models/organization";
 import type { Memory, MemoryTier } from "@/types";
 import { isUniqueConstraintError } from "@/utils/db";
 import {
@@ -544,6 +546,14 @@ const registry = defineArchestraTools([
       const ctx = requireUserContext(context);
       if (!ctx) {
         return errorResult("This tool requires an authenticated user session.");
+      }
+
+      if (
+        !config.memory.enabled ||
+        (await OrganizationModel.getById(ctx.organizationId))?.memoryEnabled !==
+          true
+      ) {
+        return errorResult("Durable memory is disabled for this organization.");
       }
 
       switch (args.command) {

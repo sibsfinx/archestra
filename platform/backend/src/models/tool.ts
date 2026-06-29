@@ -13,6 +13,7 @@ import {
   SANDBOX_RUNTIME_ARCHESTRA_TOOL_SHORT_NAMES,
   SKILL_ARCHESTRA_TOOL_SHORT_NAMES,
   slugify,
+  TOOL_MEMORY_SHORT_NAME,
   TOOL_QUERY_KNOWLEDGE_SOURCES_SHORT_NAME,
   TOOL_RUN_TOOL_SHORT_NAME,
   TOOL_SEARCH_TOOLS_SHORT_NAME,
@@ -593,7 +594,21 @@ class ToolModel {
       }
     }
 
-    return ToolModel.filterUnavailableTools(tools, hasKnowledgeSources);
+    const agent = await AgentModel.findById(agentId);
+    const organization = agent
+      ? await OrganizationModel.getById(agent.organizationId)
+      : null;
+    const memoryToolActive =
+      config.memory.enabled && organization?.memoryEnabled === true;
+    const filteredTools = memoryToolActive
+      ? tools
+      : tools.filter(
+          (tool) =>
+            tool.name !==
+            archestraMcpBranding.getToolName(TOOL_MEMORY_SHORT_NAME),
+        );
+
+    return ToolModel.filterUnavailableTools(filteredTools, hasKnowledgeSources);
   }
 
   /**

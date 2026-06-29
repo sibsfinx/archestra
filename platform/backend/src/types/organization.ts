@@ -384,6 +384,10 @@ export const UpdateSecuritySettingsSchema = z.object({
   allowToolAutoAssignment: z.boolean().optional(),
 });
 
+export const UpdateMemorySettingsSchema = z.object({
+  memoryEnabled: z.boolean(),
+});
+
 export const UpdateLlmSettingsSchema = z.object({
   convertToolResultsToToon: z.boolean().optional(),
   compressionScope: OrganizationCompressionScopeSchema.optional(),

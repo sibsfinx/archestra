@@ -433,6 +433,7 @@ export {
   updateRole,
   updateScheduleTrigger,
   updateSecuritySettings,
+  updateMemorySettings,
   updateServiceAccount,
   updateServiceAccountToken,
   updateSiteNotification,

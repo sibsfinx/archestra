@@ -35,6 +35,23 @@ vi.mock("@/lib/secrets.query", () => ({
 }));
 
 let mockEnterpriseFeatures = false;
+let mockMemoryGloballyEnabled = true;
+let mockMemoryOrgEnabled = true;
+
+vi.mock("@/lib/config/config.query", () => ({
+  useFeature: (flag: string) => {
+    if (flag === "memoryEnabled") {
+      return mockMemoryGloballyEnabled;
+    }
+    return undefined;
+  },
+}));
+
+vi.mock("@/lib/organization.query", () => ({
+  useOrganization: () => ({
+    data: { memoryEnabled: mockMemoryOrgEnabled },
+  }),
+}));
 
 vi.mock("@/lib/config/config", () => ({
   default: {
@@ -58,6 +75,8 @@ beforeEach(() => {
   mockPermissions = {};
   mockSecretsType = "DB";
   mockEnterpriseFeatures = false;
+  mockMemoryGloballyEnabled = true;
+  mockMemoryOrgEnabled = true;
 
   vi.mocked(authClient.getSession).mockResolvedValue({
     data: {
@@ -153,6 +172,45 @@ describe("useSettingsTabs", () => {
     await waitFor(() => {
       const labels = getTabLabels(result.current);
       expect(labels).not.toContain("Memory");
+    });
+  });
+
+  it("hides Memory tab when durable memory is globally disabled", async () => {
+    mockPermissions = { memory: ["read", "admin"] };
+    mockMemoryGloballyEnabled = false;
+
+    const { result } = renderHook(() => useSettingsTabs(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(getTabLabels(result.current)).not.toContain("Memory");
+    });
+  });
+
+  it("shows Memory tab for memory admins when org memory is disabled", async () => {
+    mockPermissions = { memory: ["read", "admin"] };
+    mockMemoryOrgEnabled = false;
+
+    const { result } = renderHook(() => useSettingsTabs(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(getTabLabels(result.current)).toContain("Memory");
+    });
+  });
+
+  it("hides Memory tab when org memory is disabled and user is not a memory admin", async () => {
+    mockPermissions = { memory: ["read"] };
+    mockMemoryOrgEnabled = false;
+
+    const { result } = renderHook(() => useSettingsTabs(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(getTabLabels(result.current)).not.toContain("Memory");
     });
   });
 

@@ -317,6 +317,13 @@ const organizationsTable = pgTable("organization", {
     .default(false),
 
   /**
+   * When true, durable memory is active for the org: settings CRUD, MCP writes,
+   * and {{memories}} prompt injection. Org admins can re-enable from Settings →
+   * Memory when flipped off.
+   */
+  memoryEnabled: boolean("memory_enabled").notNull().default(true),
+
+  /**
    * Legacy preset column (feature removed) — retained inert. Held a validation
    * regex (no delimiters/flags) applied to default-scoped field values at
    * install time. No longer read or written.

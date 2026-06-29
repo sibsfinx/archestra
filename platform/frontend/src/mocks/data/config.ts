@@ -40,6 +40,7 @@ export function makeConfig(
       mcpSandboxDomain: null,
       chatSecretScanEnabled: true,
       agentHooksEnabled: false,
+      memoryEnabled: true,
       ...overrides.features,
       maintenanceMode: overrides.features?.maintenanceMode ?? null,
     },
