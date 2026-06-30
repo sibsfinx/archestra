@@ -105,7 +105,11 @@ export function AuthPageWithInvitationCheck({ path }: { path: string }) {
     !isLoadingPublicConfig &&
     !isBasicAuthDisabled;
 
-  const isSignInOrSignUp = path === "sign-in" || isSignUpPath;
+  const isSignInOrSignUp =
+    path === "sign-in" ||
+    isSignUpPath ||
+    path === "forgot-password" ||
+    path === "reset-password";
 
   return (
     <BackendConnectivityStatus>

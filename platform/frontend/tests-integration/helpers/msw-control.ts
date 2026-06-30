@@ -2,6 +2,13 @@ import type { APIRequestContext, Page } from "@playwright/test";
 
 export type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 
+function isRequestTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "TimeoutError" || /timeout/i.test(error.message))
+  );
+}
+
 export type HandlerOverride = {
   method: HttpMethod;
   url: string;
@@ -46,12 +53,23 @@ export class MswControl {
     return data.unhandledRequests ?? [];
   }
 
-  async reset(): Promise<void> {
-    const res = await this.request.delete(this.endpoint);
-    if (!res.ok()) {
-      throw new Error(
-        `MswControl.reset failed (status ${res.status()}): ${await res.text()}`,
-      );
+  async reset(options?: { tolerateTimeout?: boolean }): Promise<void> {
+    const tolerateTimeout = options?.tolerateTimeout ?? false;
+    try {
+      const res = await this.request.delete(this.endpoint, {
+        timeout: tolerateTimeout ? 5_000 : undefined,
+      });
+      if (!res.ok()) {
+        throw new Error(
+          `MswControl.reset failed (status ${res.status()}): ${await res.text()}`,
+        );
+      }
+    } catch (error) {
+      if (!tolerateTimeout || !isRequestTimeout(error)) {
+        throw error;
+      }
+      // Teardown only: the dev server or page may already be wedged after a
+      // navigation timeout; still try to reset the browser worker below.
     }
     await this.resetBrowser();
   }

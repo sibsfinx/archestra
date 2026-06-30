@@ -32,7 +32,7 @@ test.describe("Onboarding mail setup", () => {
       body: unconfiguredMailStatusSeed,
     });
 
-    await page.goto("/chat");
+    await onboardingMailPage.gotoChat();
     await onboardingMailPage.selectChatPath();
     await onboardingMailPage.continueFromWelcome();
 
@@ -80,7 +80,7 @@ test.describe("Onboarding mail setup", () => {
       body: unconfiguredMailStatusSeed,
     });
 
-    await page.goto("/chat");
+    await onboardingMailPage.gotoChat();
     await onboardingMailPage.selectChatPath();
     await onboardingMailPage.continueFromWelcome();
 
@@ -150,7 +150,7 @@ test.describe("Onboarding mail setup", () => {
       body: makeOrganization({ onboardingComplete: true }),
     });
 
-    await page.goto("/chat");
+    await onboardingMailPage.gotoChat();
     await onboardingMailPage.selectChatPath();
     await onboardingMailPage.continueFromWelcome();
     await onboardingMailPage.skipButton.click();
@@ -192,7 +192,7 @@ test.describe("Onboarding mail setup", () => {
       body: makeOrganization({ onboardingComplete: true }),
     });
 
-    await page.goto("/chat");
+    await onboardingMailPage.gotoChat();
     await onboardingMailPage.selectChatPath();
     await onboardingMailPage.continueFromWelcome();
 

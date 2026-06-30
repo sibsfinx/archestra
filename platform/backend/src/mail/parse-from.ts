@@ -1,4 +1,4 @@
-import { DEFAULT_APP_NAME } from "@shared";
+import { DEFAULT_APP_NAME } from "@archestra/shared";
 import type { MailSender } from "./types";
 
 /**

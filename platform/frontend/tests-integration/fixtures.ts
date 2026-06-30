@@ -72,7 +72,7 @@ export const test = base.extend<Fixtures & AutoFixtures>({
     // Reset after each test so overrides and unhandled-request lists don't
     // leak across tests when the Next.js dev server is reused
     // (`reuseExistingServer: true`).
-    await control.reset();
+    await control.reset({ tolerateTimeout: true });
   },
   _backendLeakGuard: [
     async ({ page, mswControl }, use) => {

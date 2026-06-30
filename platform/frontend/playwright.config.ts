@@ -1,38 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 
 const IS_CI = !!process.env.CI;
-
-// Cursor/sandbox agents set PLAYWRIGHT_BROWSERS_PATH to an empty cache dir.
-// Prefer the developer's existing browser install instead of downloading again.
-if (process.env.PLAYWRIGHT_BROWSERS_PATH?.includes("cursor-sandbox-cache")) {
-  delete process.env.PLAYWRIGHT_BROWSERS_PATH;
-}
-
-function chromiumProjectUse() {
-  if (IS_CI) {
-    return { ...devices["Desktop Chrome"] };
-  }
-
-  const macChrome =
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  if (existsSync(macChrome)) {
-    return { ...devices["Desktop Chrome"], channel: "chrome" as const };
-  }
-
-  const userPlaywrightCache = resolve(
-    homedir(),
-    "Library/Caches/ms-playwright",
-  );
-  if (existsSync(userPlaywrightCache)) {
-    process.env.PLAYWRIGHT_BROWSERS_PATH = userPlaywrightCache;
-  }
-
-  return { ...devices["Desktop Chrome"] };
-}
 // Mirrors ARCHESTRA_FRONTEND_INT_TESTS_PORT in dev/Tiltfile.dev so a parallel
 // Tilt session (separate worktree) runs tests against its own MSW frontend
 // instead of the main worktree's :3010. `pnpm dev:stack:up` writes the value
@@ -87,7 +58,7 @@ export default defineConfig({
     navigationTimeout: 45_000,
   },
   expect: { timeout: 30_000 },
-  projects: [{ name: "chromium", use: chromiumProjectUse() }],
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     command: `next dev -H 127.0.0.1 -p ${INT_TESTS_PORT}`,
     url: INT_TESTS_URL,

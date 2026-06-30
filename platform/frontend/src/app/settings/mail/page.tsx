@@ -9,29 +9,39 @@ import {
 } from "@/components/settings/settings-block";
 import { Badge } from "@/components/ui/badge";
 import { useSession } from "@/lib/auth/auth.query";
-import { useMailSettings } from "@/lib/mail-settings.query";
+import { useMailSettings, useMailStatus } from "@/lib/mail-settings.query";
 import { useMailSettingsDraft } from "@/lib/use-mail-settings-draft";
 import { formatDate } from "@/lib/utils";
 
 function statusBadge(
   settings: NonNullable<ReturnType<typeof useMailSettings>["data"]>,
+  status: { configured: boolean; verified: boolean } | undefined,
 ) {
-  if (settings.provider === "log" || !settings.fromAddress) {
+  const configured =
+    status?.configured ??
+    (settings.overriddenByEnv ||
+      (settings.provider !== "log" && Boolean(settings.fromAddress)));
+
+  if (!configured) {
     return <Badge variant="destructive">Not configured</Badge>;
   }
-  if (!settings.verifiedAt) {
-    return <Badge variant="secondary">Configured, unverified</Badge>;
+  if (status?.verified || settings.verifiedAt) {
+    return (
+      <Badge variant="default">
+        Verified{" "}
+        {settings.verifiedAt
+          ? formatDate({ date: settings.verifiedAt })
+          : "via environment"}
+      </Badge>
+    );
   }
-  return (
-    <Badge variant="default">
-      Verified {formatDate({ date: settings.verifiedAt })}
-    </Badge>
-  );
+  return <Badge variant="secondary">Configured, unverified</Badge>;
 }
 
 export default function MailSettingsPage() {
   const { data: session } = useSession();
   const { data: settings, isPending } = useMailSettings();
+  const { data: mailStatus } = useMailStatus();
   const defaultRecipient = session?.user?.email ?? "";
 
   const draft = useMailSettingsDraft({
@@ -66,7 +76,7 @@ export default function MailSettingsPage() {
       <SettingsBlock
         title="Outbound mail"
         description="Configure SMTP for password reset and invitation emails."
-        control={statusBadge(settings)}
+        control={statusBadge(settings, mailStatus)}
       />
 
       <MailSetupForm

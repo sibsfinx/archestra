@@ -20,6 +20,13 @@ export class OnboardingMailPage {
     this.testEmailButton = page.getByTestId(E2eTestId.MailSettingsTestEmailButton);
   }
 
+  async gotoChat() {
+    await this.page.goto("/chat", { waitUntil: "domcontentloaded" });
+    await this.page
+      .getByRole("button", { name: /Use Chat Interface/i })
+      .waitFor({ state: "visible" });
+  }
+
   async selectChatPath() {
     await this.page.getByRole("button", { name: /Use Chat Interface/i }).click();
   }

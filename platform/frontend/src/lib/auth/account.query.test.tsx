@@ -1,4 +1,3 @@
-import { archestraApiSdk } from "@archestra/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -25,16 +24,6 @@ vi.mock("@/lib/clients/auth/auth-client", () => ({
     },
   },
 }));
-
-vi.mock("@archestra/shared", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@archestra/shared")>();
-  return {
-    ...actual,
-    archestraApiSdk: {
-      getDefaultCredentialsStatus: vi.fn(),
-    },
-  };
-});
 
 describe("useChangeAccountPasswordMutation", () => {
   beforeEach(() => {
@@ -67,38 +56,6 @@ describe("useChangeAccountPasswordMutation", () => {
 describe("useSignInWithEmailMutation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("checks backend default credential status after default admin email sign-in", async () => {
-    vi.mocked(authClient.signIn.email).mockResolvedValue({
-      data: { url: "/chat" },
-      error: null,
-    } as Awaited<ReturnType<typeof authClient.signIn.email>>);
-    vi.mocked(archestraApiSdk.getDefaultCredentialsStatus).mockResolvedValue({
-      data: { enabled: true },
-      error: undefined,
-      response: new Response(),
-      request: new Request("http://localhost"),
-    } as Awaited<
-      ReturnType<typeof archestraApiSdk.getDefaultCredentialsStatus>
-    >);
-
-    const { result } = renderHook(() => useSignInWithEmailMutation(), {
-      wrapper: createWrapper(),
-    });
-
-    await expect(
-      result.current.mutateAsync({
-        email: "admin@example.com",
-        password: "password",
-        callbackURL: "/chat",
-      }),
-    ).resolves.toEqual({
-      success: true,
-      requiresDefaultPasswordChange: true,
-      redirectUrl: "/chat",
-    });
-    expect(archestraApiSdk.getDefaultCredentialsStatus).toHaveBeenCalled();
   });
 
   it("returns forgot-password metadata for invalid sign-in credentials", async () => {

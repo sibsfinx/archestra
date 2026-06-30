@@ -13,7 +13,7 @@ import {
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -35,12 +35,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  useChangeAccountPasswordMutation,
-  useSignInWithEmailMutation,
-} from "@/lib/auth/account.query";
-import { clearDefaultPasswordChangePending } from "@/lib/auth/default-password-change";
+import { useSignInWithEmailMutation } from "@/lib/auth/account.query";
 import { usePublicIdentityProviders } from "@/lib/auth/identity-provider-read.query";
 import {
   clearSsoSignInAttempt,
@@ -50,6 +45,8 @@ import config from "@/lib/config/config";
 import { usePublicConfig } from "@/lib/config/config.query";
 import { useAppName } from "@/lib/hooks/use-app-name";
 import { RecoverAccountView } from "./recover-account-view";
+import { ForgotPasswordView } from "./forgot-password-view";
+import { ResetPasswordView } from "./reset-password-view";
 import { SignOutWithIdpLogout } from "./sign-out-with-idp-logout";
 import { TwoFactorView } from "./two-factor-view";
 
@@ -148,25 +145,11 @@ const SignInFormSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
-const DefaultPasswordChangeFormSchema = z
-  .object({
-    password: z.string().min(8, "Password must be at least 8 characters"),
-    confirmPassword: z.string().min(1, "Confirm your password"),
-  })
-  .refine((values) => values.password === values.confirmPassword, {
-    message: "Passwords do not match",
-    path: ["confirmPassword"],
-  });
-
 type SignInFormValues = z.infer<typeof SignInFormSchema>;
-type DefaultPasswordChangeFormValues = z.infer<
-  typeof DefaultPasswordChangeFormSchema
->;
 
 const ComponentState = {
   SignIn: "sign-in",
   InvalidCredentials: "invalid-credentials",
-  DefaultPasswordChange: "default-password-change",
 } as const;
 
 const FORGOT_PASSWORD_PATH = "/auth/forgot-password" as const;
@@ -331,6 +314,14 @@ export function AuthViewWithErrorHandling({
 
   if (path === "recover-account") {
     return <RecoverAccountView />;
+  }
+
+  if (path === "forgot-password") {
+    return <ForgotPasswordView />;
+  }
+
+  if (path === "reset-password") {
+    return <ResetPasswordView />;
   }
 
   // Only sign-in remains: sign-up is handled upstream (blocked without an
@@ -532,12 +523,7 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
   const [componentState, setComponentState] = useState<ComponentStateValue>(
     ComponentState.SignIn,
   );
-  const [defaultPasswordRedirectUrl, setDefaultPasswordRedirectUrl] = useState<
-    string | null
-  >(null);
-  const defaultAdminCurrentPasswordRef = useRef<string | null>(null);
   const signIn = useSignInWithEmailMutation();
-  const changePassword = useChangeAccountPasswordMutation();
   const signInForm = useForm<SignInFormValues>({
     resolver: zodResolver(SignInFormSchema),
     defaultValues: {
@@ -545,18 +531,9 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
       password: "",
     },
   });
-  const defaultPasswordChangeForm = useForm<DefaultPasswordChangeFormValues>({
-    resolver: zodResolver(DefaultPasswordChangeFormSchema),
-    defaultValues: {
-      password: "",
-      confirmPassword: "",
-    },
-  });
 
   async function onSignIn(values: SignInFormValues) {
     setComponentState(ComponentState.SignIn);
-    setDefaultPasswordRedirectUrl(null);
-    defaultAdminCurrentPasswordRef.current = null;
 
     const result = await signIn.mutateAsync({
       email: values.email,
@@ -580,135 +557,7 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
       return;
     }
 
-    if (result.requiresDefaultPasswordChange) {
-      setDefaultPasswordRedirectUrl(result.redirectUrl);
-      defaultAdminCurrentPasswordRef.current = values.password;
-      setComponentState(ComponentState.DefaultPasswordChange);
-      return;
-    }
-
-    clearDefaultPasswordChangePending();
     redirectAfterSignIn(result.redirectUrl);
-  }
-
-  async function onChangeDefaultPassword(
-    values: DefaultPasswordChangeFormValues,
-  ) {
-    if (componentState !== ComponentState.DefaultPasswordChange) return;
-    if (!defaultAdminCurrentPasswordRef.current) return;
-
-    const changed = await changePassword.mutateAsync({
-      currentPassword: defaultAdminCurrentPasswordRef.current,
-      newPassword: values.password,
-      revokeOtherSessions: true,
-    });
-
-    if (changed) {
-      clearDefaultPasswordChangePending();
-      defaultAdminCurrentPasswordRef.current = null;
-      redirectAfterSignIn(defaultPasswordRedirectUrl ?? callbackURL ?? "/");
-    }
-  }
-
-  function onBackFromDefaultPasswordChange() {
-    clearDefaultPasswordChangePending();
-    defaultAdminCurrentPasswordRef.current = null;
-    setDefaultPasswordRedirectUrl(null);
-    defaultPasswordChangeForm.reset();
-    signInForm.reset({
-      email: signInForm.getValues("email"),
-      password: "",
-    });
-    setComponentState(ComponentState.SignIn);
-  }
-
-  if (componentState === ComponentState.DefaultPasswordChange) {
-    return (
-      <Card
-        className="w-full"
-        data-testid={E2eTestId.DefaultPasswordChangePrompt}
-      >
-        <CardHeader>
-          <CardTitle>Change Password</CardTitle>
-          <CardDescription>
-            The default administrator password is still active. Choose a new
-            password to secure this account.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Form {...defaultPasswordChangeForm}>
-            <form
-              className="space-y-4"
-              onSubmit={defaultPasswordChangeForm.handleSubmit(
-                onChangeDefaultPassword,
-              )}
-            >
-              <div className="grid gap-2">
-                <Label htmlFor="default-admin-new-password">New password</Label>
-                <Input
-                  id="default-admin-new-password"
-                  type="password"
-                  autoComplete="new-password"
-                  disabled={changePassword.isPending}
-                  aria-invalid={
-                    !!defaultPasswordChangeForm.formState.errors.password
-                  }
-                  {...defaultPasswordChangeForm.register("password")}
-                />
-                {defaultPasswordChangeForm.formState.errors.password && (
-                  <p className="text-destructive text-sm">
-                    {
-                      defaultPasswordChangeForm.formState.errors.password
-                        .message
-                    }
-                  </p>
-                )}
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="default-admin-confirm-password">
-                  Confirm password
-                </Label>
-                <Input
-                  id="default-admin-confirm-password"
-                  type="password"
-                  autoComplete="new-password"
-                  disabled={changePassword.isPending}
-                  aria-invalid={
-                    !!defaultPasswordChangeForm.formState.errors.confirmPassword
-                  }
-                  {...defaultPasswordChangeForm.register("confirmPassword")}
-                />
-                {defaultPasswordChangeForm.formState.errors.confirmPassword && (
-                  <p className="text-destructive text-sm">
-                    {
-                      defaultPasswordChangeForm.formState.errors.confirmPassword
-                        .message
-                    }
-                  </p>
-                )}
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={changePassword.isPending}
-                  data-testid={E2eTestId.DefaultPasswordChangeSkipButton}
-                  onClick={onBackFromDefaultPasswordChange}
-                >
-                  Back
-                </Button>
-                <Button type="submit" disabled={changePassword.isPending}>
-                  {changePassword.isPending && (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  )}
-                  Submit
-                </Button>
-              </div>
-            </form>
-          </Form>
-        </CardContent>
-      </Card>
-    );
   }
 
   return (

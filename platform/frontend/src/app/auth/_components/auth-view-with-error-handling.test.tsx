@@ -19,15 +19,10 @@ vi.mock("./recover-account-view", () => ({
 }));
 
 const mockSignInMutateAsync = vi.fn();
-const mockChangePasswordMutateAsync = vi.fn();
 
 vi.mock("@/lib/auth/account.query", () => ({
   useSignInWithEmailMutation: () => ({
     mutateAsync: mockSignInMutateAsync,
-    isPending: false,
-  }),
-  useChangeAccountPasswordMutation: () => ({
-    mutateAsync: mockChangePasswordMutateAsync,
     isPending: false,
   }),
 }));
@@ -67,11 +62,8 @@ describe("AuthViewWithErrorHandling", () => {
     vi.clearAllMocks();
     mockSignInMutateAsync.mockResolvedValue({
       success: true,
-      requiresDefaultPasswordChange: false,
       redirectUrl: "/",
     });
-    mockChangePasswordMutateAsync.mockResolvedValue(true);
-    window.sessionStorage.clear();
     window.history.replaceState({}, "", "/auth/sign-in");
     vi.mocked(useSearchParams).mockReturnValue(
       mockSearchParams as unknown as ReturnType<typeof useSearchParams>,
@@ -166,89 +158,6 @@ describe("AuthViewWithErrorHandling", () => {
     await waitFor(() => {
       expect(screen.getByText("Sign-In Failed")).toBeInTheDocument();
     });
-  });
-
-  it("prompts for a new password after default admin sign-in", async () => {
-    mockSearchParams.get.mockReturnValue(null);
-    mockSignInMutateAsync.mockResolvedValue({
-      success: true,
-      requiresDefaultPasswordChange: true,
-      redirectUrl: "/chat",
-    });
-
-    render(<AuthViewWithErrorHandling path="sign-in" callbackURL="/chat" />);
-
-    fireEvent.change(screen.getByLabelText("Email"), {
-      target: { value: "admin@example.com" },
-    });
-    fireEvent.change(screen.getByLabelText("Password"), {
-      target: { value: "password" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Change Password")).toBeInTheDocument();
-    });
-    expect(screen.getByLabelText("New password")).toBeInTheDocument();
-    expect(screen.getByLabelText("Confirm password")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("New password"), {
-      target: { value: "new-admin-password" },
-    });
-    fireEvent.change(screen.getByLabelText("Confirm password"), {
-      target: { value: "new-admin-password" },
-    });
-    expect(screen.getByLabelText("New password")).toHaveValue(
-      "new-admin-password",
-    );
-    expect(screen.getByLabelText("Confirm password")).toHaveValue(
-      "new-admin-password",
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-
-    await waitFor(() => {
-      expect(mockChangePasswordMutateAsync).toHaveBeenCalledWith({
-        currentPassword: "password",
-        newPassword: "new-admin-password",
-        revokeOtherSessions: true,
-      });
-    });
-  });
-
-  it("returns to sign-in when backing out of the default password prompt", async () => {
-    mockSearchParams.get.mockReturnValue(null);
-    mockSignInMutateAsync.mockResolvedValue({
-      success: true,
-      requiresDefaultPasswordChange: true,
-      redirectUrl: "/chat",
-    });
-
-    render(<AuthViewWithErrorHandling path="sign-in" callbackURL="/chat" />);
-
-    fireEvent.change(screen.getByLabelText("Email"), {
-      target: { value: "admin@example.com" },
-    });
-    fireEvent.change(screen.getByLabelText("Password"), {
-      target: { value: "password" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Change Password")).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
-
-    await waitFor(() => {
-      expect(
-        screen.getByText("Enter your email below to login to your account"),
-      ).toBeInTheDocument();
-    });
-    expect(screen.getByLabelText("Email")).toHaveValue("admin@example.com");
-    expect(screen.getByLabelText("Password")).toHaveValue("");
-    expect(screen.queryByText("Change Password")).not.toBeInTheDocument();
   });
 
   it("shows a forgot-password link for invalid credentials", async () => {

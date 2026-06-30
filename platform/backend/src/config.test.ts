@@ -1334,12 +1334,12 @@ describe("parseOutboundMailProvider", () => {
 
   test("returns log for unknown providers even under vitest", () => {
     process.env.VITEST = "true";
-    process.env.ARCHESTRA_MAIL_PROVIDER = "brevo";
+    process.env.ARCHESTRA_MAIL_PROVIDER = "unknown-provider";
     expect(parseOutboundMailProvider()).toBe("log");
   });
 
   test("returns log for unknown providers", () => {
-    process.env.ARCHESTRA_MAIL_PROVIDER = "brevo";
+    process.env.ARCHESTRA_MAIL_PROVIDER = "unknown-provider";
     expect(parseOutboundMailProvider()).toBe("log");
   });
 });

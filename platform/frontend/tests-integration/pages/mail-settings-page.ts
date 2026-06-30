@@ -19,6 +19,8 @@ export class MailSettingsPage {
   }
 
   async goto() {
-    await this.page.goto("/settings/mail");
+    await this.page.goto("/settings/mail", { waitUntil: "domcontentloaded" });
+    // MswInit renders null until the browser worker is up; wait for page chrome.
+    await this.page.getByText("Outbound mail").waitFor({ state: "visible" });
   }
 }
