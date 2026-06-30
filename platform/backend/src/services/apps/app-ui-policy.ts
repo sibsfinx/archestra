@@ -92,6 +92,20 @@ export async function buildValidatedVersionPayload(params: {
   };
 }
 
+// Document-root probe, mirroring the Rust scanner's HEAD_OR_HTML
+// (app_html.rs): true when the HTML opens a <head> or <html> element. Used to
+// gate an edit that would strip a document root the base version still had — a
+// fragment-from-the-start app (no root to begin with) is unaffected. Kept as the
+// same raw-text regex as the scanner on purpose: its precision (it would also
+// match a `<html>` written inside a comment or string) is exactly the platform's
+// existing notion of "has a document root", so the edit gate and the save-time
+// warning never disagree.
+const HTML_DOCUMENT_ROOT_PATTERN = /<(head|html)[\s>]/i;
+
+export function htmlHasDocumentRoot(html: string): boolean {
+  return HTML_DOCUMENT_ROOT_PATTERN.test(html);
+}
+
 type AppValidationFinding = {
   severity: "error" | "warning";
   message: string;
@@ -127,7 +141,38 @@ export async function validateAppHtmlStatic(
       )}); the sandbox CSP blocks it at render time. Load client-side assets from an allowlisted CDN, and fetch data through an assigned MCP tool instead.`,
     });
   }
+  const browserStorageApis = browserStorageApisUsed(html);
+  if (browserStorageApis.length > 0) {
+    findings.push({
+      severity: "warning",
+      message: `Uses browser storage (${browserStorageApis.join(
+        ", ",
+      )}), which is unavailable in the app sandbox (an opaque origin where it throws) and ephemeral browser-local state even where it works. Persist state through the platform-attached store instead: archestra.storage.user.* (private per viewer) or archestra.storage.shared.* (shared across viewers).`,
+    });
+  }
   return findings;
+}
+
+const SCRIPT_BLOCK_PATTERN = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+const BROWSER_STORAGE_API_PATTERN =
+  /\b(localStorage|sessionStorage|indexedDB)\b/g;
+
+// Browser storage APIs referenced inside <script> blocks. Scoped to script
+// content (not the whole html) so prose, comments, and attribute text that
+// merely name an API do not warn — the same structural anchoring the resource
+// check uses. It stays a lexical scan: dynamic access (window["local"+"Storage"])
+// is not detected, which is acceptable for a soft authoring hint. They are
+// unusable in the app sandbox: the opaque-origin iframe throws on access, and
+// where it doesn't the data is ephemeral and browser-local rather than the
+// platform-attached archestra.storage. Returned in first-seen order, deduplicated.
+function browserStorageApisUsed(html: string): string[] {
+  const apis = new Set<string>();
+  for (const block of html.matchAll(SCRIPT_BLOCK_PATTERN)) {
+    for (const match of block[1].matchAll(BROWSER_STORAGE_API_PATTERN)) {
+      apis.add(match[1]);
+    }
+  }
+  return [...apis];
 }
 
 const RESOURCE_REF_PATTERN =

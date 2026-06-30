@@ -1,7 +1,19 @@
-import { and, count, desc, eq, ilike, inArray, isNull, or } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  isNull,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import db, { schema } from "@/database";
 import { secretManager } from "@/secrets-manager";
 import {
+  type CatalogItemApprovalStatus,
   ENTERPRISE_MANAGED_CLIENT_SECRET_OVERRIDE_SECRET_KEY,
   type InsertInternalMcpCatalog,
   type InternalMcpCatalog,
@@ -13,7 +25,7 @@ import McpCatalogLabelModel from "./mcp-catalog-label";
 import McpCatalogTeamModel from "./mcp-catalog-team";
 import McpServerModel from "./mcp-server";
 import SecretModel from "./secret";
-import ToolModel from "./tool";
+import ToolModel, { toolUiResourceUriSql } from "./tool";
 
 /**
  * Data-access layer for `internal_mcp_catalog` — the org's private registry
@@ -89,6 +101,36 @@ class InternalMcpCatalogModel {
     isAdmin?: boolean;
     organizationId?: string;
   }): Promise<ListInternalMcpCatalog[]> {
+    return InternalMcpCatalogModel.listAll(options, false);
+  }
+
+  /**
+   * Like {@link InternalMcpCatalogModel.findAll} but also returns app backing
+   * catalogs (`serverType: "app"`). The registry never uses this — only the
+   * gateway capabilities picker, where an app's launch tool is assignable like
+   * any other tool. Apps stay hidden from the registry list and the
+   * agent-callable {@link InternalMcpCatalogModel.searchByQuery}.
+   */
+  static async findAllWithApps(options?: {
+    expandSecrets?: boolean;
+    userId?: string;
+    isAdmin?: boolean;
+    organizationId?: string;
+  }): Promise<ListInternalMcpCatalog[]> {
+    return InternalMcpCatalogModel.listAll(options, true);
+  }
+
+  private static async listAll(
+    options:
+      | {
+          expandSecrets?: boolean;
+          userId?: string;
+          isAdmin?: boolean;
+          organizationId?: string;
+        }
+      | undefined,
+    includeApps: boolean,
+  ): Promise<ListInternalMcpCatalog[]> {
     const {
       expandSecrets = true,
       userId,
@@ -98,10 +140,16 @@ class InternalMcpCatalogModel {
 
     let dbItems: Array<typeof schema.internalMcpCatalogTable.$inferSelect>;
 
-    // Legacy preset rows (non-NULL parentCatalogItemId) are never surfaced.
-    const parentOnlyCondition = isNull(
-      schema.internalMcpCatalogTable.parentCatalogItemId,
-    );
+    const listConditions = [
+      // Legacy preset rows (non-NULL parentCatalogItemId) are never surfaced.
+      isNull(schema.internalMcpCatalogTable.parentCatalogItemId),
+    ];
+    if (!includeApps) {
+      // App backing catalogs are managed on the Apps page, never surfaced in the
+      // MCP registry (UI list or the agent-callable registry search).
+      listConditions.push(ne(schema.internalMcpCatalogTable.serverType, "app"));
+    }
+    const baseListCondition = and(...listConditions);
 
     if (userId && !isAdmin && !organizationId) {
       return [];
@@ -115,10 +163,10 @@ class InternalMcpCatalogModel {
           organizationId,
         );
       if (accessibleIds.length === 0) return [];
-      const where = parentOnlyCondition
+      const where = baseListCondition
         ? and(
             inArray(schema.internalMcpCatalogTable.id, accessibleIds),
-            parentOnlyCondition,
+            baseListCondition,
           )
         : inArray(schema.internalMcpCatalogTable.id, accessibleIds);
       dbItems = await db
@@ -128,8 +176,8 @@ class InternalMcpCatalogModel {
         .orderBy(desc(schema.internalMcpCatalogTable.createdAt));
     } else {
       const baseQuery = db.select().from(schema.internalMcpCatalogTable);
-      dbItems = await (parentOnlyCondition
-        ? baseQuery.where(parentOnlyCondition)
+      dbItems = await (baseListCondition
+        ? baseQuery.where(baseListCondition)
         : baseQuery
       ).orderBy(desc(schema.internalMcpCatalogTable.createdAt));
     }
@@ -169,10 +217,12 @@ class InternalMcpCatalogModel {
       ilike(schema.internalMcpCatalogTable.description, `%${query}%`),
     );
 
-    // Legacy preset rows (non-NULL parentCatalogItemId) are never surfaced.
     const searchCondition = and(
       baseSearchCondition,
+      // Legacy preset rows (non-NULL parentCatalogItemId) are never surfaced.
       isNull(schema.internalMcpCatalogTable.parentCatalogItemId),
+      // App backing catalogs are never surfaced via registry search.
+      ne(schema.internalMcpCatalogTable.serverType, "app"),
     );
 
     if (userId && !isAdmin && !organizationId) {
@@ -421,27 +471,53 @@ class InternalMcpCatalogModel {
 
     // Name immutability: matches the existing UI-enforced posture and avoids
     // cascading rename to k8s deployment names and pre-slugified tool rows.
+    // App backing catalogs are exempt — they have no k8s deployment, and their
+    // launch tool's name is id-suffixed (stable across renames), so renaming an
+    // app's catalog is safe.
     if (dbValues.name !== undefined) {
       const [existing] = await db
-        .select({ name: schema.internalMcpCatalogTable.name })
+        .select({
+          name: schema.internalMcpCatalogTable.name,
+          serverType: schema.internalMcpCatalogTable.serverType,
+        })
         .from(schema.internalMcpCatalogTable)
         .where(eq(schema.internalMcpCatalogTable.id, id));
-      if (
-        existing &&
-        dbValues.name !== undefined &&
-        dbValues.name !== existing.name
-      ) {
-        throw new Error("Catalog item name cannot be changed after creation");
+      if (existing?.serverType !== "app") {
+        if (existing && dbValues.name !== existing.name) {
+          throw new Error("Catalog item name cannot be changed after creation");
+        }
+        delete dbValues.name;
       }
-      delete dbValues.name;
+    }
+
+    const setValues: Partial<
+      typeof schema.internalMcpCatalogTable.$inferInsert
+    > = { ...dbValues };
+
+    // Reset a stale image-approval decision when the custom image changes: the
+    // new image must be re-vetted by the install-time gate, otherwise a one-time
+    // approval would silently carry over to any swapped image.
+    if ("localConfig" in dbValues) {
+      const [existing] = await db
+        .select({ localConfig: schema.internalMcpCatalogTable.localConfig })
+        .from(schema.internalMcpCatalogTable)
+        .where(eq(schema.internalMcpCatalogTable.id, id));
+      const oldImage = existing?.localConfig?.dockerImage ?? null;
+      const newImage = dbValues.localConfig?.dockerImage ?? null;
+      if (oldImage !== newImage) {
+        setValues.catalogItemApprovalStatus = null;
+        setValues.catalogItemApprovalReason = null;
+        setValues.catalogItemApprovalReviewedBy = null;
+        setValues.catalogItemApprovalReviewedAt = null;
+      }
     }
 
     let dbItem: typeof schema.internalMcpCatalogTable.$inferSelect | undefined;
 
-    if (Object.keys(dbValues).length > 0) {
+    if (Object.keys(setValues).length > 0) {
       [dbItem] = await db
         .update(schema.internalMcpCatalogTable)
-        .set(dbValues)
+        .set(setValues)
         .where(eq(schema.internalMcpCatalogTable.id, id))
         .returning();
     } else {
@@ -476,6 +552,113 @@ class InternalMcpCatalogModel {
     await InternalMcpCatalogModel.populateAuthorNames([result]);
     return result;
   }
+
+  /**
+   * Record the catalog item's image as `pending` admin approval. Compare-and-set:
+   * only writes when no admin decision exists yet (status NULL or already
+   * `pending`), so a concurrent admin approval is never clobbered. Returns the
+   * winning status so the caller can re-decide after a race.
+   */
+  static async markImageApprovalPending(
+    id: string,
+  ): Promise<{ status: CatalogItemApprovalStatus | null }> {
+    const [updated] = await db
+      .update(schema.internalMcpCatalogTable)
+      .set({ catalogItemApprovalStatus: "pending" })
+      .where(
+        and(
+          eq(schema.internalMcpCatalogTable.id, id),
+          or(
+            isNull(schema.internalMcpCatalogTable.catalogItemApprovalStatus),
+            eq(
+              schema.internalMcpCatalogTable.catalogItemApprovalStatus,
+              "pending",
+            ),
+          ),
+        ),
+      )
+      .returning({
+        status: schema.internalMcpCatalogTable.catalogItemApprovalStatus,
+      });
+    if (updated) return updated;
+
+    // Lost the CAS to a concurrent admin approval — read the winning decision.
+    const [row] = await db
+      .select({
+        status: schema.internalMcpCatalogTable.catalogItemApprovalStatus,
+      })
+      .from(schema.internalMcpCatalogTable)
+      .where(eq(schema.internalMcpCatalogTable.id, id));
+    return row ?? { status: null };
+  }
+
+  /**
+   * Clear a stale `pending` flag (e.g. the registry was later added to the
+   * trusted list, so the item is no longer gated). Only touches `pending` rows —
+   * an explicit `approved` decision is preserved.
+   */
+  static async clearImageApprovalPending(id: string): Promise<void> {
+    await db
+      .update(schema.internalMcpCatalogTable)
+      .set({
+        catalogItemApprovalStatus: null,
+        catalogItemApprovalReviewedBy: null,
+        catalogItemApprovalReviewedAt: null,
+      })
+      .where(
+        and(
+          eq(schema.internalMcpCatalogTable.id, id),
+          eq(
+            schema.internalMcpCatalogTable.catalogItemApprovalStatus,
+            "pending",
+          ),
+        ),
+      );
+  }
+
+  /** Mark a catalog item's image approved; future installs proceed. */
+  static async approveImage(params: {
+    id: string;
+    reviewedBy: string;
+  }): Promise<InternalMcpCatalog | null> {
+    const { id, reviewedBy } = params;
+    await db
+      .update(schema.internalMcpCatalogTable)
+      .set({
+        catalogItemApprovalStatus: "approved",
+        catalogItemApprovalReviewedBy: reviewedBy,
+        catalogItemApprovalReviewedAt: new Date(),
+      })
+      .where(eq(schema.internalMcpCatalogTable.id, id));
+    return InternalMcpCatalogModel.findById(id, { expandSecrets: false });
+  }
+
+  /** Catalog items in this org awaiting image approval, newest first. */
+  static async listPendingImageApproval(
+    organizationId: string,
+  ): Promise<InternalMcpCatalog[]> {
+    const rows = await db
+      .select()
+      .from(schema.internalMcpCatalogTable)
+      .where(
+        and(
+          eq(schema.internalMcpCatalogTable.organizationId, organizationId),
+          eq(
+            schema.internalMcpCatalogTable.catalogItemApprovalStatus,
+            "pending",
+          ),
+        ),
+      )
+      .orderBy(desc(schema.internalMcpCatalogTable.updatedAt));
+    const items: InternalMcpCatalog[] = rows.map((dbItem) => ({
+      ...dbItem,
+      labels: [],
+      teams: [],
+    }));
+    await InternalMcpCatalogModel.populateAuthorNames(items);
+    return items;
+  }
+
   /**
    * Secret ownership when deleting a row:
    *   - clientSecretId / localConfigSecretId / presetSecretId are owned by the
@@ -860,23 +1043,30 @@ class InternalMcpCatalogModel {
     }
 
     const ids = dbItems.map((item) => item.id);
-    const [labelsMap, teamsMap, toolCountMap] = await Promise.all([
+    const [labelsMap, teamsMap, toolStatsMap] = await Promise.all([
       McpCatalogLabelModel.getLabelsForCatalogItems(ids),
       McpCatalogTeamModel.getTeamDetailsForCatalogs(ids),
-      InternalMcpCatalogModel.getToolCounts(ids),
+      InternalMcpCatalogModel.getToolStats(ids),
     ]);
 
     return dbItems.map((item) => ({
       ...item,
       labels: labelsMap.get(item.id) || [],
       teams: teamsMap.get(item.id) || [],
-      toolCount: toolCountMap.get(item.id) ?? 0,
+      toolCount: toolStatsMap.get(item.id)?.toolCount ?? 0,
+      providesUi: toolStatsMap.get(item.id)?.providesUi ?? false,
     }));
   }
 
-  private static async getToolCounts(
+  /**
+   * Per-catalog tool stats in a single grouped scan: the tool count and whether
+   * any tool exposes a `ui://` MCP App resource (`providesUi`). Runs on every
+   * catalog list load via {@link attachListMetadata}, so `providesUi` is folded
+   * into this existing scan rather than added as a separate query.
+   */
+  private static async getToolStats(
     catalogIds: string[],
-  ): Promise<Map<string, number>> {
+  ): Promise<Map<string, { toolCount: number; providesUi: boolean }>> {
     if (catalogIds.length === 0) {
       return new Map();
     }
@@ -885,6 +1075,7 @@ class InternalMcpCatalogModel {
       .select({
         catalogId: schema.toolsTable.catalogId,
         toolCount: count(schema.toolsTable.id),
+        providesUi: sql<boolean>`bool_or(${toolUiResourceUriSql()} is not null)`,
       })
       .from(schema.toolsTable)
       .where(inArray(schema.toolsTable.catalogId, catalogIds))
@@ -893,10 +1084,18 @@ class InternalMcpCatalogModel {
     return new Map(
       rows
         .filter(
-          (row): row is { catalogId: string; toolCount: number } =>
-            row.catalogId !== null,
+          (
+            row,
+          ): row is {
+            catalogId: string;
+            toolCount: number;
+            providesUi: boolean;
+          } => row.catalogId !== null,
         )
-        .map((row) => [row.catalogId, row.toolCount]),
+        .map((row) => [
+          row.catalogId,
+          { toolCount: row.toolCount, providesUi: row.providesUi ?? false },
+        ]),
     );
   }
 
@@ -954,7 +1153,8 @@ class InternalMcpCatalogModel {
     if (!row) return null;
 
     const toolCount =
-      (await InternalMcpCatalogModel.getToolCounts([id])).get(id) ?? 0;
+      (await InternalMcpCatalogModel.getToolStats([id])).get(id)?.toolCount ??
+      0;
 
     const transportType = row.localConfig?.transportType ?? "stdio";
     const envKeys = Array.isArray(row.localConfig?.environment)

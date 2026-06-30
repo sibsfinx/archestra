@@ -1,11 +1,13 @@
 import * as SelectPrimitive from "@radix-ui/react-select";
 import {
   AppWindow,
+  ArrowLeft,
   ChevronDown,
   type LucideIcon,
   Minimize2,
   PanelRight,
   RefreshCw,
+  Settings,
   SquareArrowOutUpRight,
 } from "lucide-react";
 import Link from "next/link";
@@ -15,7 +17,7 @@ import { Select, SelectContent, SelectItem } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 const PILL_CLASS =
-  "flex h-7 w-80 min-w-0 max-w-full items-center gap-1 rounded-md border border-border/60 bg-background px-1";
+  "flex h-7 w-80 @max-lg:w-64 @max-md:w-full min-w-0 max-w-full items-center gap-1 rounded-md border border-border/60 bg-background px-1";
 
 /**
  * Pure-layout browser-style top bar for an {@link McpAppCard}: a fixed-height row
@@ -35,7 +37,7 @@ export function McpAppTopBar({
   right?: React.ReactNode;
 }) {
   return (
-    <div className="relative z-10 grid h-9 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 px-2 shadow-[0_1px_2px_-1px_rgb(0_0_0/0.08)]">
+    <div className="@container relative z-10 grid h-9 shrink-0 grid-cols-[1fr_auto_1fr] @max-md:grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-2 shadow-[0_1px_2px_-1px_rgb(0_0_0/0.08)]">
       <div className="flex min-w-0 items-center justify-start gap-0.5">
         {left}
       </div>
@@ -61,13 +63,23 @@ function PillActions({ children }: { children?: React.ReactNode }) {
 /** Static address pill: the app name with optional inline action buttons. */
 export function McpAppAddressPill({
   label,
+  leading,
   actions,
+  className,
 }: {
   label?: React.ReactNode;
+  leading?: React.ReactNode;
   actions?: React.ReactNode;
+  /** Overrides the pill's default fixed width (e.g. `w-full` in a narrow panel). */
+  className?: string;
 }) {
   return (
-    <div className={PILL_CLASS}>
+    <div className={cn(PILL_CLASS, className)}>
+      {leading ? (
+        <div className="relative z-10 flex shrink-0 items-center">
+          {leading}
+        </div>
+      ) : null}
       <span className="pointer-events-none min-w-0 flex-1 truncate px-1 text-xs text-muted-foreground">
         {label}
       </span>
@@ -86,19 +98,24 @@ export function McpAppSwitcher({
   value,
   options,
   onChange,
+  leading,
   actions,
+  className,
 }: {
   value: string | null;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
+  leading?: React.ReactNode;
   actions?: React.ReactNode;
+  /** Overrides the pill's default fixed width (e.g. `w-full` in a narrow panel). */
+  className?: string;
 }) {
   const selectedLabel = options.find((o) => o.value === value)?.label;
   return (
     <Select value={value ?? undefined} onValueChange={onChange}>
-      <div className={cn(PILL_CLASS, "relative cursor-pointer")}>
+      <div className={cn(PILL_CLASS, "relative cursor-pointer", className)}>
         {/* Transparent trigger fills the pill so clicking the name/icon
-            (pointer-events-none) opens the dropdown; the action buttons
+            (pointer-events-none) opens the dropdown; the leading/action buttons
             above it (z-10) keep their own clicks. */}
         <SelectPrimitive.Trigger
           aria-label="Switch app"
@@ -108,13 +125,21 @@ export function McpAppSwitcher({
             <SelectPrimitive.Value />
           </span>
         </SelectPrimitive.Trigger>
+        {leading ? (
+          <div className="relative z-10 flex shrink-0 items-center">
+            {leading}
+          </div>
+        ) : null}
         <span className="pointer-events-none min-w-0 flex-1 truncate px-1 text-xs text-muted-foreground">
           {selectedLabel}
         </span>
         <PillActions>{actions}</PillActions>
         <ChevronDown className="pointer-events-none mr-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       </div>
-      <SelectContent>
+      <SelectContent
+        position="popper"
+        className="w-[var(--radix-select-trigger-width)]"
+      >
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value}>
             <span className="truncate">{option.label}</span>
@@ -169,6 +194,71 @@ export function McpAppRefreshButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+// Sized to match the panel header's collapse button (h-8 w-8 / h-4 w-4) rather
+// than the smaller in-pill icons, so the gear's center lines up vertically with
+// the collapse button directly above it.
+export function McpAppSettingsButton({ onClick }: { onClick: () => void }) {
+  return (
+    <SettingsBarButton icon={Settings} label="App settings" onClick={onClick} />
+  );
+}
+
+// Settings mode's left control: cancel and return to the live app.
+export function McpAppBackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <SettingsBarButton icon={ArrowLeft} label="Back to app" onClick={onClick} />
+  );
+}
+
+// Settings mode's right control: submits the settings form (associated by id, so
+// it can live in the top bar outside the form).
+export function McpAppSaveButton({
+  formId,
+  disabled,
+  saving,
+}: {
+  formId: string;
+  disabled?: boolean;
+  saving?: boolean;
+}) {
+  return (
+    <Button
+      type="submit"
+      form={formId}
+      disabled={disabled}
+      aria-label="Save settings"
+      size="sm"
+      className="h-7 px-3 text-xs font-medium"
+    >
+      {saving ? "Saving…" : "Save"}
+    </Button>
+  );
+}
+
+function SettingsBarButton({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      variant="ghost"
+      size="icon"
+      className="h-8 w-8 text-muted-foreground"
+    >
+      <Icon className="h-4 w-4" />
+    </Button>
+  );
+}
+
 export function McpAppFullscreenExitButton({
   onClick,
 }: {
@@ -187,8 +277,8 @@ export function McpAppStandaloneButton({ appId }: { appId: string }) {
   return (
     <Button
       asChild
-      aria-label="Open standalone"
-      title="Open standalone"
+      aria-label="Open in new tab"
+      title="Open in new tab"
       {...ICON_BUTTON_PROPS}
     >
       <Link href={`/a/${appId}`} target="_blank" rel="noreferrer">
@@ -222,25 +312,6 @@ export function McpAppChangelogPill({
         {version != null && ` · v${version}`}
         {verb && ` · ${verb}`}
       </span>
-    </div>
-  );
-}
-
-export function McpAppVersionBar({
-  appId,
-  version,
-}: {
-  appId: string;
-  version: number;
-}) {
-  return (
-    <div className="relative z-10 flex h-7 shrink-0 items-center px-3 shadow-[0_-1px_2px_-1px_rgb(0_0_0/0.08)]">
-      <Link
-        href={`/apps/${appId}`}
-        className="text-xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
-      >
-        Version {version}
-      </Link>
     </div>
   );
 }

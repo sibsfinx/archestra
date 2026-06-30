@@ -2,20 +2,24 @@
 
 import {
   CalendarClock,
+  ExternalLink,
   MoreHorizontal,
-  Pencil,
+  Pause,
   Play,
   Plus,
   Power,
   Trash2,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { runChatHref } from "@/app/projects/[id]/schedules/[triggerId]/run-row.utils";
 import {
   DEFAULT_FORM_STATE,
   isValidCronExpression,
   type ScheduleTriggerFormState,
 } from "@/app/scheduled-tasks/schedule-trigger.utils";
 import { AgentSelector } from "@/components/agent-selector";
+import { useResolveRunChat } from "@/components/scheduled-tasks/use-resolve-run-chat";
 import { StandardFormDialog } from "@/components/standard-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +31,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -41,6 +46,8 @@ import {
   useDeleteScheduleTrigger,
   useDisableScheduleTrigger,
   useEnableScheduleTrigger,
+  useRunScheduleTriggerNow,
+  useScheduleTriggerRuns,
   useScheduleTriggers,
   useUpdateScheduleTrigger,
 } from "@/lib/schedule-trigger.query";
@@ -112,40 +119,72 @@ export function ProjectSchedulesSection({
 // === internal components ===
 
 function ScheduleRow({ schedule }: { schedule: ScheduleTrigger }) {
+  const router = useRouter();
   const enableSchedule = useEnableScheduleTrigger();
   const disableSchedule = useDisableScheduleTrigger();
   const deleteSchedule = useDeleteScheduleTrigger();
+  const runNow = useRunScheduleTriggerNow();
   const [editOpen, setEditOpen] = useState(false);
+
+  const { resolve, isResolving } = useResolveRunChat();
+  // "Open recent run" (overflow menu) opens this schedule's LAST run's chat.
+  // Fetch just that run (no polling — the section already refreshes the trigger
+  // list).
+  const { data: runsResponse } = useScheduleTriggerRuns(schedule.id, {
+    limit: 1,
+    refetchInterval: false,
+  });
+  const lastRun = runsResponse?.data?.[0];
+  const lastRunChatHref = lastRun
+    ? runChatHref({ triggerId: schedule.id, run: lastRun })
+    : null;
+  // Last run has a chat → go straight to it. Last run without one (legacy) →
+  // create it, then open. No runs yet → the menu item is disabled.
+  const openRecentRun = () => {
+    if (lastRunChatHref) router.push(lastRunChatHref);
+    else if (lastRun) resolve(schedule.id, lastRun.id);
+  };
 
   return (
     <div className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5">
-      <span
+      <button
+        type="button"
+        onClick={() => setEditOpen(true)}
         className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10",
-          !schedule.enabled && "bg-muted",
+          "flex min-w-0 flex-1 items-center gap-3 text-left transition-opacity hover:opacity-80",
+          !schedule.enabled && "opacity-60",
         )}
       >
-        <CalendarClock
+        <span
           className={cn(
-            "h-4 w-4 text-primary",
-            !schedule.enabled && "text-muted-foreground",
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10",
+            !schedule.enabled && "bg-muted",
           )}
-          aria-hidden
-        />
-      </span>
-      <span className={cn("min-w-0 flex-1", !schedule.enabled && "opacity-60")}>
-        <span className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium">{schedule.name}</span>
-          {!schedule.enabled && (
-            <Badge variant="outline" className="shrink-0">
-              Disabled
-            </Badge>
-          )}
+        >
+          <CalendarClock
+            className={cn(
+              "h-4 w-4 text-primary",
+              !schedule.enabled && "text-muted-foreground",
+            )}
+            aria-hidden
+          />
         </span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {schedule.agent?.name ?? "Default agent"}
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium">
+              {schedule.name}
+            </span>
+            {!schedule.enabled && (
+              <Badge variant="outline" className="shrink-0">
+                Disabled
+              </Badge>
+            )}
+          </span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {schedule.agent?.name ?? "Default agent"}
+          </span>
         </span>
-      </span>
+      </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="icon" aria-label="Schedule actions">
@@ -153,6 +192,21 @@ function ScheduleRow({ schedule }: { schedule: ScheduleTrigger }) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            disabled={!lastRun || isResolving}
+            onSelect={openRecentRun}
+          >
+            <ExternalLink className="h-4 w-4" />
+            Open recent run
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            disabled={runNow.isPending}
+            onSelect={() => runNow.mutate(schedule.id)}
+          >
+            <Play className="h-4 w-4" />
+            Run manually
+          </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() =>
               schedule.enabled
@@ -162,19 +216,15 @@ function ScheduleRow({ schedule }: { schedule: ScheduleTrigger }) {
           >
             {schedule.enabled ? (
               <>
-                <Power className="h-4 w-4" />
+                <Pause className="h-4 w-4" />
                 Disable
               </>
             ) : (
               <>
-                <Play className="h-4 w-4" />
+                <Power className="h-4 w-4" />
                 Enable
               </>
             )}
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setEditOpen(true)}>
-            <Pencil className="h-4 w-4" />
-            Edit
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"

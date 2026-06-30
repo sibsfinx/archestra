@@ -24,7 +24,21 @@ import {
 import packageJson from "../../package.json";
 
 type ProcessType = "web" | "worker" | "all";
-type FileStorageProviderType = "db" | "filesystem";
+type FileStorageProviderType = "db" | "filesystem" | "s3";
+
+/**
+ * Resolved S3 byte-store config (validated only when provider === "s3").
+ * @public — consumed by the S3 file-storage provider in a later task
+ */
+export type FileStorageS3Config = {
+  bucket: string;
+  region: string;
+  endpoint: string | undefined;
+  forcePathStyle: boolean;
+  accessKeyId: string | undefined;
+  secretAccessKey: string | undefined;
+  keyPrefix: string;
+};
 
 /**
  * Load .env from platform root
@@ -155,6 +169,11 @@ const getConfiguredOrigins = (): string[] => {
   const frontendUrl = process.env.ARCHESTRA_FRONTEND_URL?.trim();
   if (frontendUrl) {
     origins.push(frontendUrl);
+  }
+
+  const ngrokDomain = process.env.ARCHESTRA_NGROK_DOMAIN?.trim();
+  if (ngrokDomain) {
+    origins.push(ngrokDomain);
   }
 
   const additional =
@@ -292,6 +311,10 @@ const DEFAULT_BODY_LIMIT = 70 * 1024 * 1024;
 const DEFAULT_DATABASE_POOL_MAX = 50;
 const MAX_DATABASE_POOL_MAX = 500;
 
+// Per-connection statement timeout (ms). Defense-in-depth: kills runaway
+// queries instead of letting them hang a connection indefinitely. 0 disables.
+const DEFAULT_DATABASE_STATEMENT_TIMEOUT_MILLIS = 30000;
+
 // Default OTEL OTLP endpoint for HTTP/Protobuf (4318). For gRPC, the typical port is 4317.
 const DEFAULT_OTEL_ENDPOINT = "http://localhost:4318";
 const DEFAULT_OTEL_CONTENT_MAX_LENGTH = 10_000; // 10KB
@@ -396,6 +419,20 @@ export const parseContentMaxLength = (
 };
 
 /** @public — exported for testability */
+export const parseLogFormat = (
+  envValue?: string | undefined,
+): "json" | "pretty" => {
+  const value = envValue?.toLowerCase().trim();
+  if (value === "pretty" || value === "json") return value;
+  if (value && value.length > 0) {
+    logger.warn(
+      `Invalid ARCHESTRA_LOGGING_FORMAT value "${envValue}", using default "json"`,
+    );
+  }
+  return "json";
+};
+
+/** @public — exported for testability */
 export const parseDatabasePoolMax = (envValue?: string | undefined): number => {
   const value = envValue?.trim();
   if (!value) {
@@ -408,6 +445,27 @@ export const parseDatabasePoolMax = (envValue?: string | undefined): number => {
       `Invalid ARCHESTRA_DATABASE_POOL_MAX value "${value}", using default ${DEFAULT_DATABASE_POOL_MAX}`,
     );
     return DEFAULT_DATABASE_POOL_MAX;
+  }
+
+  return parsed;
+};
+
+/** @public — exported for testability */
+export const parseDatabaseStatementTimeoutMillis = (
+  envValue?: string | undefined,
+): number => {
+  const value = envValue?.trim();
+  if (!value) {
+    return DEFAULT_DATABASE_STATEMENT_TIMEOUT_MILLIS;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  // 0 disables the timeout; negative/NaN falls back to the default.
+  if (Number.isNaN(parsed) || parsed < 0) {
+    logger.warn(
+      `Invalid ARCHESTRA_DATABASE_STATEMENT_TIMEOUT_MILLIS value "${value}", using default ${DEFAULT_DATABASE_STATEMENT_TIMEOUT_MILLIS}`,
+    );
+    return DEFAULT_DATABASE_STATEMENT_TIMEOUT_MILLIS;
   }
 
   return parsed;
@@ -653,7 +711,9 @@ export function parseFileStorageProvider(
   value: string | undefined,
 ): FileStorageProviderType {
   const normalized = value?.trim().toLowerCase();
-  return normalized === "filesystem" ? "filesystem" : "db";
+  if (normalized === "filesystem") return "filesystem";
+  if (normalized === "s3") return "s3";
+  return "db";
 }
 
 /** @public — exported for testability */
@@ -674,6 +734,50 @@ export function parseFileStorageFilesystemRoot(params: {
     );
   }
   return root;
+}
+
+/** @public — exported for testability */
+export function parseFileStorageS3Config(params: {
+  provider: FileStorageProviderType;
+  env: {
+    bucket: string | undefined;
+    region: string | undefined;
+    endpoint: string | undefined;
+    forcePathStyle: string | undefined;
+    accessKeyId: string | undefined;
+    secretAccessKey: string | undefined;
+    keyPrefix: string | undefined;
+  };
+}): FileStorageS3Config {
+  const { env } = params;
+  const bucket = env.bucket?.trim() ?? "";
+  if (params.provider === "s3" && !bucket) {
+    throw new Error(
+      "ARCHESTRA_FILE_STORAGE_S3_BUCKET is required when ARCHESTRA_FILE_STORAGE_PROVIDER=s3",
+    );
+  }
+  const accessKeyId = env.accessKeyId?.trim() || undefined;
+  const secretAccessKey = env.secretAccessKey?.trim() || undefined;
+  // Static credentials are all-or-nothing: a half-set pair would silently fall
+  // back to the AWS default credential chain (a different identity), so reject it
+  // loudly rather than resolve an unintended identity against the bucket.
+  if (
+    params.provider === "s3" &&
+    Boolean(accessKeyId) !== Boolean(secretAccessKey)
+  ) {
+    throw new Error(
+      "ARCHESTRA_FILE_STORAGE_S3_ACCESS_KEY_ID and ARCHESTRA_FILE_STORAGE_S3_SECRET_ACCESS_KEY must be set together, or both omitted to use the AWS default credential chain",
+    );
+  }
+  return {
+    bucket,
+    region: env.region?.trim() || "us-east-1",
+    endpoint: env.endpoint?.trim() || undefined,
+    forcePathStyle: env.forcePathStyle?.trim().toLowerCase() === "true",
+    accessKeyId,
+    secretAccessKey,
+    keyPrefix: env.keyPrefix?.trim().replace(/^\/+|\/+$/g, "") ?? "",
+  };
 }
 
 /** @public — exported for testability */
@@ -830,6 +934,18 @@ const fileStorageFilesystemRoot = parseFileStorageFilesystemRoot({
   provider: fileStorageProvider,
   value: process.env.ARCHESTRA_FILE_STORAGE_FILESYSTEM_ROOT,
 });
+const fileStorageS3Config = parseFileStorageS3Config({
+  provider: fileStorageProvider,
+  env: {
+    bucket: process.env.ARCHESTRA_FILE_STORAGE_S3_BUCKET,
+    region: process.env.ARCHESTRA_FILE_STORAGE_S3_REGION,
+    endpoint: process.env.ARCHESTRA_FILE_STORAGE_S3_ENDPOINT,
+    forcePathStyle: process.env.ARCHESTRA_FILE_STORAGE_S3_FORCE_PATH_STYLE,
+    accessKeyId: process.env.ARCHESTRA_FILE_STORAGE_S3_ACCESS_KEY_ID,
+    secretAccessKey: process.env.ARCHESTRA_FILE_STORAGE_S3_SECRET_ACCESS_KEY,
+    keyPrefix: process.env.ARCHESTRA_FILE_STORAGE_S3_KEY_PREFIX,
+  },
+});
 
 const config = {
   frontendBaseUrl,
@@ -952,6 +1068,9 @@ const config = {
   database: {
     url: getDatabaseUrl(),
     poolMax: parseDatabasePoolMax(process.env.ARCHESTRA_DATABASE_POOL_MAX),
+    statementTimeoutMillis: parseDatabaseStatementTimeoutMillis(
+      process.env.ARCHESTRA_DATABASE_STATEMENT_TIMEOUT_MILLIS,
+    ),
   },
   llm: {
     openai: {
@@ -1317,7 +1436,7 @@ const config = {
    * Projects + the persistent "My Files" file system on top of the skill
    * sandbox. Ships dark: off by default until ready to surface. Gates the
    * project APIs, the My Files endpoints, the persistent-file MCP tools
-   * (search_files, read_file, save_result, edit_file, delete_file), and the
+   * (search_files, read_file, save_file, edit_file, delete_file), and the
    * my_file upload source.
    */
   projects: {
@@ -1333,6 +1452,7 @@ const config = {
   fileStorage: {
     provider: fileStorageProvider,
     filesystemRoot: fileStorageFilesystemRoot,
+    s3: fileStorageS3Config,
   },
   vault: {
     token: process.env.ARCHESTRA_HASHICORP_VAULT_TOKEN || DEFAULT_VAULT_TOKEN,
@@ -1355,6 +1475,9 @@ const config = {
      * Mirrors the CORS/trusted-origin configuration so all three stay in sync.
      */
     allowedOrigins: addLoopbackEquivalents(getConfiguredOrigins()),
+  },
+  logging: {
+    format: parseLogFormat(process.env.ARCHESTRA_LOGGING_FORMAT),
   },
   observability: {
     otel: {

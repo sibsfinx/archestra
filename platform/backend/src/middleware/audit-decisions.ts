@@ -311,10 +311,6 @@ export const AUDIT_DECISIONS = {
     audited: false,
     reason: "child of app; immutable version snapshot, parent audited",
   },
-  appTeamTable: {
-    audited: false,
-    reason: "join: app × team; parent (app) audited",
-  },
   appToolsTable: {
     audited: false,
     reason: "tools attached to an app; parent (app) carries the signal",
@@ -382,6 +378,13 @@ export const AUDIT_DECISIONS = {
     audited: false,
     reason: "join: virtual key × team; parent audited",
   },
+  virtualApiKeyLlmProxiesTable: {
+    audited: false,
+    // Orphaned table — the passthrough-key "allowed LLM proxies" feature was
+    // removed; no code reads/writes it. Retained only so this release doesn't
+    // drop it under old pods; entry stays until the table is dropped (phase 2).
+    reason: "orphaned/unused; retained for zero-downtime, dropped in phase 2",
+  },
 
   // =========================================================================
   // Children of audited parents
@@ -441,7 +444,7 @@ export const AUDIT_DECISIONS = {
   filesTable: {
     audited: false,
     reason:
-      "user's own PFS files; download_file/save_result outputs, no admin signal",
+      "user's own PFS files; download_file/save_file outputs, no admin signal",
   },
   skillSandboxReplayEventsTable: {
     audited: false,

@@ -9,6 +9,8 @@ import {
 } from "@archestra/shared";
 import {
   AlertTriangle,
+  Copy,
+  FileSearch,
   MessageSquare,
   Pencil,
   Plus,
@@ -68,6 +70,7 @@ import {
   setCatalogEditParam,
 } from "./catalog-edit-link";
 import { resolveCatalogEnvironmentLabel } from "./catalog-environment-label";
+import { shouldShowMcpCardChatButton } from "./chat-button-visibility";
 import {
   computeDeploymentStatusSummary,
   DeploymentStatusDot,
@@ -78,10 +81,12 @@ import {
   McpServerSettingsDialog,
   type SettingsPage,
 } from "./mcp-server-settings-dialog";
+import { OAuthReauthIndicator } from "./oauth-reauth-indicator";
 import {
   UninstallServerDialog,
   type UninstallServerInstall,
 } from "./uninstall-server-dialog";
+import { useCanReauthenticate } from "./use-can-reauthenticate";
 
 export type CatalogItem =
   archestraApiTypes.GetInternalMcpCatalogResponses["200"][number];
@@ -134,6 +139,14 @@ export type McpServerCardProps = {
 };
 
 export type McpServerCardVariant = "remote" | "local" | "builtin";
+
+export function cardVariantForServerType(
+  serverType: string,
+): McpServerCardVariant {
+  if (serverType === "builtin") return "builtin";
+  if (serverType === "remote") return "remote";
+  return "local";
+}
 
 export type McpServerCardBaseProps = McpServerCardProps & {
   variant: McpServerCardVariant;
@@ -449,9 +462,27 @@ export function McpServerCard({
   // Check for OAuth refresh errors on any credential the user can see
   // The backend already filters mcpServerOfCurrentCatalogItem to only include visible credentials
   const isOAuthServer = !!item.oauthConfig;
-  const hasOAuthRefreshError =
-    isOAuthServer &&
-    (mcpServerOfCurrentCatalogItem?.some((s) => s.oauthRefreshError) ?? false);
+  // The re-auth entry point is gated by the caller's permission over the failed
+  // connection, not by catalog-edit access; a caller without it still sees the
+  // failure state but is offered no action. When several connections have failed,
+  // prefer one the caller can re-authenticate so the marker stays actionable
+  // regardless of row order, falling back to any failed one to still surface it.
+  const canReauthenticate = useCanReauthenticate();
+  const oauthFailedServers = isOAuthServer
+    ? (mcpServerOfCurrentCatalogItem?.filter((s) => s.oauthRefreshError) ?? [])
+    : [];
+  const oauthFailedServer =
+    oauthFailedServers.find((s) => canReauthenticate(s)) ??
+    oauthFailedServers[0];
+  const oauthReauthIndicator = oauthFailedServer ? (
+    <OAuthReauthIndicator
+      onActivate={
+        canReauthenticate(oauthFailedServer)
+          ? () => openSettingsPage("connections")
+          : undefined
+      }
+    />
+  ) : null;
 
   const isInstalling = Boolean(
     !isDeploymentFailed &&
@@ -579,19 +610,22 @@ export function McpServerCard({
   );
   const toolsCount = item.toolCount ?? 0;
 
-  const chatButton =
-    toolsCount > 0 ? (
-      <Button
-        variant="outline"
-        size="sm"
-        className="flex-1"
-        disabled={isChatCreating}
-        onClick={handleChatWithMcpServer}
-      >
-        <MessageSquare className="h-4 w-4" />
-        {isChatCreating ? "Creating..." : "Chat"}
-      </Button>
-    ) : null;
+  const chatButton = shouldShowMcpCardChatButton({
+    toolsCount,
+    isBuiltin: isBuiltinVariant,
+    hasInstallation: allServersForCatalog.length > 0,
+  }) ? (
+    <Button
+      variant="outline"
+      size="sm"
+      className="flex-1"
+      disabled={isChatCreating}
+      onClick={handleChatWithMcpServer}
+    >
+      <MessageSquare className="h-4 w-4" />
+      {isChatCreating ? "Creating..." : "Chat"}
+    </Button>
+  ) : null;
 
   const settingsButton = (
     <Button
@@ -659,7 +693,10 @@ export function McpServerCard({
     showAuthorAvatar ||
     toolsCount > 0 ||
     (variant === "local" && deploymentServerIds.length > 0) ||
-    (!isBuiltinVariant && (connectionAvatars.length > 0 || hasOrgConnection));
+    (!isBuiltinVariant &&
+      (connectionAvatars.length > 0 ||
+        hasOrgConnection ||
+        Boolean(oauthReauthIndicator)));
 
   const compactInfoRow = hasCompactInfoContent ? (
     <div className="flex items-center gap-3 text-sm text-muted-foreground border-t pt-3">
@@ -801,23 +838,9 @@ export function McpServerCard({
               </Tooltip>
             </TooltipProvider>
           </AvatarGroup>
-          {hasOAuthRefreshError && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <AlertTriangle className="h-4 w-4 text-amber-500 cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs">
-                  <p className="font-medium mb-1">Authentication failed</p>
-                  <p className="text-xs text-muted-foreground">
-                    Some connections need re-authentication.
-                  </p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
         </div>
       )}
+      {!isBuiltinVariant && oauthReauthIndicator}
     </div>
   ) : null;
 
@@ -834,14 +857,20 @@ export function McpServerCard({
     </PermissionButton>
   );
 
+  // The trusted-image-registry policy holds this catalog's image until an admin
+  // approves it: block install/reinstall up front and surface why. Declared
+  // before the card-content variants since they gate the reinstall button on it.
+  const showApprovalPanel = item.imageApprovalRequired === true;
+
   const remoteCardContent = (
     <>
       <div className="flex flex-wrap gap-2">
         {chatButton}
         {!isInstalling && isCurrentUserAuthenticated && needsReinstall && (
           <PermissionButton
-            permissions={{ mcpServerInstallation: ["update"] }}
+            permissions={{ mcpServerInstallation: ["create"] }}
             onClick={triggerReinstall}
+            disabled={showApprovalPanel}
             size="sm"
             variant="outline"
             className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10"
@@ -860,7 +889,22 @@ export function McpServerCard({
     </>
   );
 
-  const localInstallButton = (
+  // `showApprovalPanel` is declared above (before the card-content variants).
+  // An admin reviews the config and approves in the edit form; the requester
+  // gets a copy-link to share.
+  const isInstallAdmin = !!isMcpServerInstallAdmin;
+
+  const copyApprovalLink = () => {
+    void navigator.clipboard.writeText(
+      `${window.location.origin}/mcp/registry?${MCP_CATALOG_EDIT_QUERY_PARAM}=${item.id}`,
+    );
+    toast.success("Link copied — share it with an admin to approve this image");
+  };
+
+  // When the image is gated, the full-width approval banner at the top of the
+  // card body explains it and carries the action — so drop the inline install
+  // button entirely (it would only fail the gate).
+  const localInstallButton = showApprovalPanel ? null : (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
@@ -897,10 +941,10 @@ export function McpServerCard({
             permissions={
               showAdminCatalogReinstall
                 ? { mcpRegistry: ["update"] }
-                : { mcpServerInstallation: ["update"] }
+                : { mcpServerInstallation: ["create"] }
             }
             onClick={triggerCombinedReinstall}
-            disabled={reinstallCatalogMutation.isPending}
+            disabled={reinstallCatalogMutation.isPending || showApprovalPanel}
             size="sm"
             variant="outline"
             className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10"
@@ -925,8 +969,9 @@ export function McpServerCard({
         {chatButton}
         {!isInstalling && isCurrentUserAuthenticated && needsReinstall && (
           <PermissionButton
-            permissions={{ mcpServerInstallation: ["update"] }}
+            permissions={{ mcpServerInstallation: ["create"] }}
             onClick={triggerReinstall}
+            disabled={showApprovalPanel}
             size="sm"
             variant="outline"
             className="flex-1 text-destructive border-destructive/30 hover:bg-destructive/10"
@@ -970,7 +1015,7 @@ export function McpServerCard({
         showConnections={!isBuiltinVariant}
         connectionCount={allServersForCatalog.length}
         showDebug={isLogsAvailable}
-        showInspector
+        showInspector={true}
         showYaml={variant === "local"}
         onAddPersonalConnection={onAddPersonalConnection}
         onAddSharedConnection={onAddSharedConnection}
@@ -1060,6 +1105,45 @@ export function McpServerCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4 flex-grow">
+        {showApprovalPanel && (
+          <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2.5">
+            <div className="flex items-center gap-2 text-sm font-medium text-amber-600 dark:text-amber-500">
+              <span>
+                {isInstallAdmin
+                  ? "Image needs approval"
+                  : "Admin review required"}
+              </span>
+              {isInstallAdmin ? (
+                <button
+                  type="button"
+                  onClick={openEditorConfiguration}
+                  title="Review config"
+                  aria-label="Review config"
+                  className="shrink-0 rounded p-0.5 hover:bg-amber-500/10"
+                >
+                  <FileSearch className="h-4 w-4" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={copyApprovalLink}
+                  title="Copy link"
+                  aria-label="Copy link"
+                  className="shrink-0 rounded p-0.5 hover:bg-amber-500/10"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {allServersForCatalog.length > 0
+                ? "The Docker image was changed to one that isn't from a trusted registry. Existing connections keep running the previous image until an admin approves."
+                : isInstallAdmin
+                  ? "This MCP server Docker image isn't from a trusted image registry. Review and approve configuration to allow installs."
+                  : "This MCP server Docker image isn't from a trusted image registry. An admin must approve it before it can be installed."}
+            </p>
+          </div>
+        )}
         {variant === "local" &&
           (() => {
             // Multi-tenant catalogs alias one K8s pod across many mcp_server

@@ -10,6 +10,7 @@ import {
   CHAT_API_KEY_ID_HEADER,
   PROVIDER_BASE_URL_HEADER,
 } from "@archestra/shared";
+import { eq } from "drizzle-orm";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
   serializerCompiler,
@@ -17,6 +18,7 @@ import {
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
 import { vi } from "vitest";
+import db, { schema } from "@/database";
 import type { PolicyBlockResult } from "@/guardrails/tool-invocation";
 import {
   LlmProviderApiKeyModel,
@@ -55,10 +57,16 @@ vi.mock("prom-client", () => ({
 }));
 
 // Mock tool-invocation to control policy evaluation results.
-// Defaults: evaluatePolicies → null (allow), getGlobalToolPolicy → "permissive".
+// Defaults: evaluatePolicies → null (allow), getToolPolicies → permissive/relaxed.
 // These defaults match the real behavior when no policies exist in the DB.
 const mockEvaluatePolicies = vi.fn<() => Promise<PolicyBlockResult | null>>();
-const mockGetGlobalToolPolicy = vi.fn<() => Promise<string>>();
+const mockGetToolPolicies =
+  vi.fn<
+    () => Promise<{
+      globalToolPolicy: "permissive" | "restrictive";
+      discoveredToolPolicy: "relaxed" | "apply_policies";
+    }>
+  >();
 
 vi.mock("@/guardrails/tool-invocation", async (importOriginal) => {
   const original =
@@ -66,7 +74,7 @@ vi.mock("@/guardrails/tool-invocation", async (importOriginal) => {
   return {
     ...original,
     evaluatePolicies: (..._args: unknown[]) => mockEvaluatePolicies(),
-    getGlobalToolPolicy: (..._args: unknown[]) => mockGetGlobalToolPolicy(),
+    getToolPolicies: (..._args: unknown[]) => mockGetToolPolicies(),
   };
 });
 
@@ -146,7 +154,10 @@ describe("LLM Proxy Handler Prometheus Metrics", () => {
 
     // Default: policies allow everything (matches real behavior when no policies exist)
     mockEvaluatePolicies.mockResolvedValue(null);
-    mockGetGlobalToolPolicy.mockResolvedValue("permissive");
+    mockGetToolPolicies.mockResolvedValue({
+      globalToolPolicy: "permissive",
+      discoveredToolPolicy: "relaxed",
+    });
   });
 
   afterEach(async () => {
@@ -272,6 +283,48 @@ describe("LLM Proxy Handler Prometheus Metrics", () => {
           value: expect.any(Number),
         }),
       );
+    });
+
+    test("passthrough virtual key attributes the interaction to its owner", async ({
+      makeUser,
+    }) => {
+      const owner = await makeUser();
+      const { value: passthroughToken, virtualKey } =
+        await VirtualApiKeyModel.create({
+          organizationId: testAgent.organizationId,
+          name: "pt-attribution",
+          keyType: "passthrough",
+          scope: "personal",
+          authorId: owner.id,
+        });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/openai/${testAgent.id}/chat/completions`,
+        headers: {
+          "content-type": "application/json",
+          // Raw provider key forwarded upstream; passthrough key attributes the user.
+          authorization: "Bearer test-key",
+          "x-archestra-virtual-key": passthroughToken,
+        },
+        payload: {
+          model: "gpt-4o",
+          messages: [{ role: "user", content: "Hello!" }],
+          stream: false,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+
+      const [interaction] = await db
+        .select()
+        .from(schema.interactionsTable)
+        .where(eq(schema.interactionsTable.profileId, testAgent.id));
+
+      expect(interaction.userId).toBe(owner.id);
+      expect(interaction.passthroughVirtualKeyId).toBe(virtualKey.id);
+      expect(interaction.virtualKeyId).toBeNull();
+      expect(interaction.authMethod).toBe("passthrough_virtual_key");
     });
 
     test.skip("non-streaming request increments token metrics", async () => {
@@ -610,7 +663,10 @@ describe("LLM Proxy Handler — recordBlockedToolSpans", () => {
 
     // Default: policies allow everything
     mockEvaluatePolicies.mockResolvedValue(null);
-    mockGetGlobalToolPolicy.mockResolvedValue("permissive");
+    mockGetToolPolicies.mockResolvedValue({
+      globalToolPolicy: "permissive",
+      discoveredToolPolicy: "relaxed",
+    });
   });
 
   afterEach(async () => {
@@ -892,7 +948,10 @@ describe("LLM Proxy Handler — CHAT_API_KEY_ID_HEADER fallback", () => {
     testAgent = await makeAgent({ name: "Test Extra Headers Agent" });
     metrics.llm.initializeMetrics([]);
     mockEvaluatePolicies.mockResolvedValue(null);
-    mockGetGlobalToolPolicy.mockResolvedValue("permissive");
+    mockGetToolPolicies.mockResolvedValue({
+      globalToolPolicy: "permissive",
+      discoveredToolPolicy: "relaxed",
+    });
 
     await app.register(openAiProxyRoutes);
     await ModelModel.upsert({
@@ -1240,7 +1299,10 @@ describe("LLM Proxy Handler — per-user provider connect required", () => {
     );
     metrics.llm.initializeMetrics([]);
     mockEvaluatePolicies.mockResolvedValue(null);
-    mockGetGlobalToolPolicy.mockResolvedValue("permissive");
+    mockGetToolPolicies.mockResolvedValue({
+      globalToolPolicy: "permissive",
+      discoveredToolPolicy: "relaxed",
+    });
 
     await app.register(githubCopilotProxyRoutes);
   });

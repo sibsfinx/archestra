@@ -10,10 +10,10 @@ export { default as AgentLabelModel } from "./agent-label";
 export { default as AgentTeamModel } from "./agent-team";
 export { default as AgentToolModel } from "./agent-tool";
 export { default as AppModel } from "./app";
+export { default as AppAccessModel } from "./app-access";
 export { default as AppDataModel } from "./app-data";
 export { default as AppRenderDiagnosticsModel } from "./app-render-diagnostics";
 export { default as AppRenderScreenshotModel } from "./app-render-screenshot";
-export { default as AppTeamModel } from "./app-team";
 export { default as AppToolModel } from "./app-tool";
 export { default as AppVersionModel } from "./app-version";
 export { default as AuditLogModel } from "./audit-log";
@@ -67,7 +67,9 @@ export { default as OptimizationRuleModel } from "./optimization-rule";
 export { default as OrganizationModel } from "./organization";
 export { default as OrganizationRoleModel } from "./organization-role";
 export {
+  ConversationNotOwnedError,
   default as ProjectModel,
+  ProjectAlreadyAssignedError,
   ProjectNameExistsError,
 } from "./project";
 export { default as ProjectPinModel } from "./project-pin";

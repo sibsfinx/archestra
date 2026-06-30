@@ -53,14 +53,40 @@ vi.mock("@/lib/config/config.query", () => ({
   useFeature: () => null,
 }));
 
+// Avoid pulling the real auth client / app query (and their network deps) into
+// the test; the edit pencil is covered by app-frame.test.tsx.
+vi.mock("@/lib/auth/auth.query", () => ({
+  useHasPermissions: () => ({ data: false }),
+}));
+
+vi.mock("@/lib/app.query", () => ({
+  useApp: vi.fn(() => ({ data: undefined })),
+}));
+
+// Stub the inline settings form: it pulls the environment/teams/auth query
+// chains, which aren't this suite's concern (covered by their own tests). Here
+// we only assert the panel chrome toggles it from the gear.
+vi.mock("@/components/mcp-app/app-settings-form", () => ({
+  AppSettingsForm: ({ onBack }: { onBack: () => void }) => (
+    <div data-testid="settings-form">
+      <button type="button" onClick={onBack}>
+        mock back
+      </button>
+    </div>
+  ),
+}));
+
 // ── Import component under test after mocks ───────────────────────────────────
 
+import { useApp } from "@/lib/app.query";
 import {
   clearAllAppDiagnostics,
   reportAppDiagnostic,
 } from "@/lib/chat/app-diagnostics-store";
 import { AppsProvider, useApps } from "./apps-context";
 import { McpAppSection } from "./mcp-app-container";
+
+const mockUseApp = vi.mocked(useApp);
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -183,6 +209,28 @@ describe("McpAppSection", () => {
     });
 
     expect(document.querySelector("iframe")).toBeInTheDocument();
+  });
+
+  it("titles an owned app from the live query, not the captured appName prop", async () => {
+    // After an edit invalidates the app query, the address bar must reflect the
+    // new name even though the appName prop was captured at render time.
+    mockUseApp.mockReturnValue({
+      data: { name: "Renamed Dashboard" },
+    } as ReturnType<typeof useApp>);
+
+    await act(async () => {
+      render(
+        <McpAppSection
+          {...defaultProps}
+          appId="11111111-1111-1111-1111-111111111111"
+          appName="Stale Dashboard"
+          preloadedResource={preloadedResource}
+        />,
+      );
+    });
+
+    expect(screen.getByText("Renamed Dashboard")).toBeInTheDocument();
+    expect(screen.queryByText("Stale Dashboard")).not.toBeInTheDocument();
   });
 });
 
@@ -392,12 +440,10 @@ describe("McpAppContainer inline height (via McpAppSection)", () => {
     return bridge;
   }
 
-  function inlineMaxHeightPx(): number {
-    const el = Array.from(document.querySelectorAll<HTMLElement>("*")).find(
-      (e) => e.style.maxHeight !== "",
-    );
-    if (!el) throw new Error("no element carries a max-height style");
-    return Number.parseFloat(el.style.maxHeight);
+  function inlineIframeHeightPx(): number {
+    const iframe = document.querySelector("iframe");
+    if (!iframe) throw new Error("iframe did not mount");
+    return Number.parseFloat(iframe.style.height);
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: reading mock call args
@@ -406,31 +452,33 @@ describe("McpAppContainer inline height (via McpAppSection)", () => {
     return calls[calls.length - 1]?.[0]?.containerDimensions;
   }
 
-  it("caps the inline card at a viewport fraction, well above the legacy 500px", async () => {
+  it("grows the inline app to its reported height", async () => {
     const bridge = await renderReadyApp(2000);
 
     await act(async () => {
       bridge.onsizechange({ height: 700 });
     });
 
-    expect(inlineMaxHeightPx()).toBe(700);
-    expect(inlineMaxHeightPx()).not.toBe(500);
+    expect(inlineIframeHeightPx()).toBe(700);
   });
 
-  it("clamps a report taller than the ceiling to the ceiling", async () => {
+  it("caps an oversized inline report at the card's visual ceiling", async () => {
+    // innerHeight 2000 → ceiling max(320px, 60vh) = 1200. A viewport-relative
+    // app that reports an ever-growing height is clamped here so the iframe
+    // can't inflate without bound (content scrolls within it instead).
     const bridge = await renderReadyApp(2000);
 
     await act(async () => {
       bridge.onsizechange({ height: 100_000 });
     });
 
-    // ceiling = round(2000 * 0.6) = 1200
-    expect(inlineMaxHeightPx()).toBe(1200);
+    expect(inlineIframeHeightPx()).toBe(1200);
   });
 
-  it("hints the viewport ceiling to the guest, not the legacy 500px", async () => {
+  it("hints the inline ceiling to the guest", async () => {
+    // innerHeight 2000 → 60vh = 1200. The host shares this honest ceiling so a
+    // cooperative app can lay out within it.
     const bridge = await renderReadyApp(2000);
-    // ceiling = round(2000 * 0.6) = 1200
     expect(lastGuestContainerDimensions(bridge)).toEqual({ maxHeight: 1200 });
   });
 
@@ -674,6 +722,96 @@ describe("McpAppSection superseded renders", () => {
 
     expect(document.querySelector("iframe")).toBeInTheDocument();
     expect(screen.queryByText(/· Updated/)).not.toBeInTheDocument();
+  });
+});
+
+describe("McpAppSection owned-app panel chrome", () => {
+  const APP_ID = "947051c7-ea8e-48ed-8077-a3cc904d9d61";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearAllAppDiagnostics();
+  });
+
+  function PanelHost({ target }: { target: HTMLElement }) {
+    const { setPortalTarget } = useApps();
+    useEffect(() => {
+      setPortalTarget(target);
+    }, [setPortalTarget, target]);
+    return null;
+  }
+
+  // Renders an owned app selected into the panel host so the tabbed chrome
+  // branch (renderInPanel && appId && ownedApp) is active. The live card portals
+  // into `target`.
+  async function renderOwnedPanel() {
+    mockUseApp.mockReturnValue({
+      data: { id: APP_ID, name: "To Do App" },
+    } as ReturnType<typeof useApp>);
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    await act(async () => {
+      render(
+        <AppsProvider
+          apps={[
+            {
+              toolCallId: "tc1",
+              label: "To Do App",
+              uiResourceUri: defaultProps.uiResourceUri,
+              createdAt: 0,
+            },
+          ]}
+        >
+          <PanelHost target={target} />
+          <McpAppSection
+            {...defaultProps}
+            appId={APP_ID}
+            toolCallId="tc1"
+            preloadedResource={preloadedResource}
+          />
+        </AppsProvider>,
+      );
+    });
+    return target;
+  }
+
+  it("toggles the inline settings form from the panel gear", async () => {
+    const user = userEvent.setup();
+    const target = await renderOwnedPanel();
+
+    // Chrome shows a single settings gear (no dropdown / publish popover) over
+    // the live app.
+    const gear = within(target).getByRole("button", { name: /app settings/i });
+    expect(target.querySelector("iframe")).toBeInTheDocument();
+    expect(
+      within(target).queryByTestId("settings-form"),
+    ).not.toBeInTheDocument();
+
+    // Clicking it swaps the body for the settings form (live iframe unmounts).
+    await act(async () => {
+      await user.click(gear);
+    });
+    expect(within(target).getByTestId("settings-form")).toBeInTheDocument();
+    expect(target.querySelector("iframe")).not.toBeInTheDocument();
+
+    // In settings mode the bar shows a back arrow (cancel) and a save action;
+    // clicking back returns to the live app and restores the gear.
+    expect(
+      within(target).getByRole("button", { name: /save settings/i }),
+    ).toBeInTheDocument();
+    await act(async () => {
+      await user.click(
+        within(target).getByRole("button", { name: /back to app/i }),
+      );
+    });
+    expect(
+      within(target).queryByTestId("settings-form"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(target).getByRole("button", { name: /app settings/i }),
+    ).toBeInTheDocument();
+
+    target.remove();
   });
 });
 

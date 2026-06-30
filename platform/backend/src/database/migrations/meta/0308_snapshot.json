@@ -1,5 +1,5 @@
 {
-  "id": "d08cdde6-4823-41be-85fe-c72874e6d037",
+  "id": "20265b21-9d79-415e-97f3-f58e05ab142c",
   "prevId": "7d96eaee-2503-41f6-9363-e5fe0647c16d",
   "version": "7",
   "dialect": "postgresql",
@@ -8320,129 +8320,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.mail_settings": {
-      "name": "mail_settings",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "provider": {
-          "name": "provider",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'log'"
-        },
-        "smtp_host": {
-          "name": "smtp_host",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "smtp_port": {
-          "name": "smtp_port",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "smtp_tls_mode": {
-          "name": "smtp_tls_mode",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'none'"
-        },
-        "smtp_username": {
-          "name": "smtp_username",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "smtp_password": {
-          "name": "smtp_password",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "from_address": {
-          "name": "from_address",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "from_name": {
-          "name": "from_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "reply_to": {
-          "name": "reply_to",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_at": {
-          "name": "verified_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "mail_settings_organization_id_organization_id_fk": {
-          "name": "mail_settings_organization_id_organization_id_fk",
-          "tableFrom": "mail_settings",
-          "tableTo": "organization",
-          "columnsFrom": [
-            "organization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "mail_settings_organization_id_unique": {
-          "name": "mail_settings_organization_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "organization_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.mcp_catalog_labels": {
       "name": "mcp_catalog_labels",
       "schema": "",
@@ -11588,7 +11465,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         },
         "schedule_triggers_actor_user_id_user_id_fk": {

@@ -1,7 +1,13 @@
 "use client";
 
 import {
+  getChatItemGeneratingIndicatorTestId,
+  getChatItemUnreadIndicatorTestId,
+} from "@archestra/shared";
+import {
   Folder,
+  FolderPlus,
+  Loader2,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -13,6 +19,8 @@ import {
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ChatListSkeleton } from "@/app/_parts/chat-list-skeleton";
+import { CreateProjectFromChatDialog } from "@/app/_parts/create-project-from-chat-dialog";
+import { isScheduledRunConversation } from "@/app/_parts/scheduled-run-sidebar.utils";
 import { AgentIcon } from "@/components/agent-icon";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { TruncatedText } from "@/components/truncated-text";
@@ -60,6 +68,7 @@ import { useGlobalChat } from "@/lib/chat/global-chat.context";
 import { buildPinnedSidebarItems } from "@/lib/chat/pinned-sidebar-items";
 import { useFeature } from "@/lib/config/config.query";
 import type { Once } from "@/lib/hooks/use-once";
+import { canCreateProjectFromChat } from "@/lib/projects/can-create-project-from-chat";
 import { usePinProject, useProjects } from "@/lib/projects/projects.query";
 import { cn } from "@/lib/utils";
 
@@ -130,9 +139,17 @@ export function ChatSidebarSection({
   const { data: canDeleteConversation } = useHasPermissions({
     chat: ["delete"],
   });
+  const { data: canCreateProject } = useHasPermissions({
+    project: ["create"],
+  });
+  const [createProjectConv, setCreateProjectConv] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
 
-  // Conversations whose title should play the typing animation (shared via chat context)
-  const { animatingTitleIds, markTitleAnimating } = useGlobalChat();
+  // Conversations whose title should play the typing animation (shared via chat
+  // context); getSession drives the live "generating" spinner.
+  const { animatingTitleIds, markTitleAnimating, getSession } = useGlobalChat();
 
   const { isMobile, setOpenMobile } = useSidebar();
 
@@ -140,7 +157,9 @@ export function ChatSidebarSection({
     ? (pathname.split("/").at(-1) ?? null)
     : null;
 
-  const recentUnpinnedChats = conversations.filter((c) => !c.pinnedAt);
+  const recentUnpinnedChats = conversations.filter(
+    (c) => !c.pinnedAt && !isScheduledRunConversation(c),
+  );
 
   const projectsEnabled = useFeature("projectsEnabled") === true;
   const { data: projectsData } = useProjects({ enabled: projectsEnabled });
@@ -149,7 +168,7 @@ export function ChatSidebarSection({
     ? (projectsData ?? []).filter((p) => p.pinnedAt)
     : [];
   const pinnedItems = buildPinnedSidebarItems({
-    chats: conversations,
+    chats: conversations.filter((c) => !isScheduledRunConversation(c)),
     projects: pinnedProjects,
   });
 
@@ -250,6 +269,14 @@ export function ChatSidebarSection({
 
   const renderConversationItem = (conv: (typeof conversations)[number]) => {
     const isCurrentConversation = currentConversationId === conv.id;
+    const sessionStatus = getSession(conv.id)?.status;
+    const isGenerating =
+      sessionStatus === "submitted" || sessionStatus === "streaming";
+    // `unread` is server-derived (lastMessageAt > lastReadAt). Suppressed on the
+    // chat you're viewing (its read marker is being updated) and while it is
+    // actively generating (the spinner wins).
+    const isUnread =
+      !isGenerating && !isCurrentConversation && conv.unread === true;
     const displayTitle = getConversationDisplayTitle(conv.title, conv.messages);
     const hasRecentlyGeneratedTitle = animatingTitleIds.has(conv.id);
     const isRegenerating =
@@ -257,6 +284,11 @@ export function ChatSidebarSection({
       generateTitleMutation.variables?.id === conv.id;
     const isMenuOpen = openMenuId === conv.id;
     const isPinned = !!conv.pinnedAt;
+    const showCreateProject = canCreateProjectFromChat({
+      projectsEnabled,
+      hasCreatePermission: canCreateProject === true,
+      conversation: conv,
+    });
 
     return (
       <SidebarMenuSubItem key={conv.id}>
@@ -355,6 +387,20 @@ export function ChatSidebarSection({
                   />
                 )}
               </span>
+              {isGenerating ? (
+                <Loader2
+                  aria-label="Generating"
+                  data-testid={getChatItemGeneratingIndicatorTestId(conv.id)}
+                  className="ml-1 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground"
+                />
+              ) : isUnread ? (
+                <span
+                  role="img"
+                  aria-label="New messages"
+                  data-testid={getChatItemUnreadIndicatorTestId(conv.id)}
+                  className="ml-1 h-2 w-2 shrink-0 rounded-full bg-primary"
+                />
+              ) : null}
               {conv.projectName && (
                 <span className="ml-1 flex max-w-24 shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
                   {conv.projectIcon ? (
@@ -369,7 +415,9 @@ export function ChatSidebarSection({
                   <span className="truncate">{conv.projectName}</span>
                 </span>
               )}
-              {(canUpdateConversation || canDeleteConversation) && (
+              {(canUpdateConversation ||
+                canDeleteConversation ||
+                showCreateProject) && (
                 <DropdownMenu
                   open={isMenuOpen}
                   onOpenChange={(open) => setOpenMenuId(open ? conv.id : null)}
@@ -425,6 +473,21 @@ export function ChatSidebarSection({
                           Regenerate title
                         </DropdownMenuItem>
                       </>
+                    )}
+                    {showCreateProject && (
+                      <DropdownMenuItem
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuId(null);
+                          setCreateProjectConv({
+                            id: conv.id,
+                            title: displayTitle,
+                          });
+                        }}
+                      >
+                        <FolderPlus className="h-4 w-4 mr-2" />
+                        Create project
+                      </DropdownMenuItem>
                     )}
                     {canDeleteConversation && (
                       <DropdownMenuItem
@@ -586,6 +649,13 @@ export function ChatSidebarSection({
         }}
         confirmLabel="Delete"
         pendingLabel="Deleting..."
+      />
+
+      <CreateProjectFromChatDialog
+        conversationId={createProjectConv?.id ?? null}
+        defaultName={createProjectConv?.title ?? ""}
+        open={createProjectConv !== null}
+        onOpenChange={(open) => !open && setCreateProjectConv(null)}
       />
     </>
   );

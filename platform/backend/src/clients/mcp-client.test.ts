@@ -209,6 +209,101 @@ describe("McpClient", () => {
     expect(mockConnect).toHaveBeenCalledTimes(1);
   });
 
+  test("forwards the abort signal to client.callTool and listTools", async () => {
+    const tool = await ToolModel.createToolIfNotExists({
+      name: "github-mcp-server__list_repos",
+      description: "List repos",
+      parameters: {},
+      catalogId,
+    });
+    await AgentToolModel.create(agentId, tool.id, { mcpServerId });
+
+    mockCallTool.mockResolvedValue({
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+    });
+
+    const controller = new AbortController();
+    await mcpClient.executeToolCallForOwner(
+      {
+        id: "call_abort_forward",
+        name: "github-mcp-server__list_repos",
+        arguments: { owner: "octocat" },
+      },
+      agentOwner(agentId),
+      undefined,
+      { abortSignal: controller.signal },
+    );
+
+    expect(mockCallTool).toHaveBeenCalledWith(
+      { name: "list_repos", arguments: { owner: "octocat" } },
+      undefined,
+      { signal: controller.signal },
+    );
+    // Name resolution (listTools) is on the same cancellable path.
+    expect(mockListTools).toHaveBeenCalledWith(undefined, {
+      signal: controller.signal,
+    });
+  });
+
+  test("rethrows an aborted call instead of retrying it", async () => {
+    const tool = await ToolModel.createToolIfNotExists({
+      name: "github-mcp-server__list_repos",
+      description: "List repos",
+      parameters: {},
+      catalogId,
+    });
+    await AgentToolModel.create(agentId, tool.id, { mcpServerId });
+
+    // A stale-session error normally triggers a fresh-session retry. With the
+    // signal aborted it must short-circuit instead — no second callTool, no
+    // session teardown, and the error propagates rather than becoming a result.
+    mockCallTool.mockRejectedValue(new Error("Session not found"));
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      mcpClient.executeToolCallForOwner(
+        {
+          id: "call_abort_no_retry",
+          name: "github-mcp-server__list_repos",
+          arguments: {},
+        },
+        agentOwner(agentId),
+        undefined,
+        { abortSignal: controller.signal },
+      ),
+    ).rejects.toThrow();
+
+    expect(mockCallTool).toHaveBeenCalledTimes(1);
+    expect(mockClose).not.toHaveBeenCalled();
+  });
+
+  test("returns an error result (does not throw) for a non-abort failure", async () => {
+    const tool = await ToolModel.createToolIfNotExists({
+      name: "github-mcp-server__list_repos",
+      description: "List repos",
+      parameters: {},
+      catalogId,
+    });
+    await AgentToolModel.create(agentId, tool.id, { mcpServerId });
+
+    mockCallTool.mockRejectedValue(new Error("upstream exploded"));
+
+    const result = await mcpClient.executeToolCallForOwner(
+      {
+        id: "call_non_abort_failure",
+        name: "github-mcp-server__list_repos",
+        arguments: {},
+      },
+      agentOwner(agentId),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(mockCallTool).toHaveBeenCalledTimes(1);
+  });
+
   test("connectAndGetTools synthesizes read-resource tools when upstream has no tools/list", async () => {
     mockListTools.mockRejectedValueOnce(new Error("Method not found"));
     mockListResources.mockResolvedValueOnce({
@@ -366,6 +461,56 @@ describe("McpClient", () => {
     });
   });
 
+  describe("executeToolCallForOwner (app backing launch tool)", () => {
+    test("audits the open launch and still returns the ui:// pointer", async () => {
+      const appCatalog = await InternalMcpCatalogModel.create({
+        name: "Clock App",
+        serverType: "app",
+        scope: "org",
+      });
+      const appServer = await McpServerModel.create({
+        name: "Clock App",
+        catalogId: appCatalog.id,
+        serverType: "app",
+      });
+      const uri = "ui://archestra-app/clock-app";
+      const openTool = await ToolModel.create({
+        name: "clock_app__open",
+        description: "Open the Clock App.",
+        parameters: { type: "object", properties: {} },
+        catalogId: appCatalog.id,
+        meta: { _meta: { ui: { resourceUri: uri } } },
+      });
+      await AgentToolModel.create(agentId, openTool.id, {
+        mcpServerId: appServer.id,
+      });
+
+      const result = await mcpClient.executeToolCallForOwner(
+        { id: "call_open", name: openTool.name, arguments: {} },
+        agentOwner(agentId),
+      );
+
+      // The in-process short-circuit still hands the host the ui:// pointer...
+      expect(result.isError).toBe(false);
+      expect(
+        (result._meta as { ui?: { resourceUri?: string } } | undefined)?.ui
+          ?.resourceUri,
+      ).toBe(uri);
+
+      // ...and now records an audit row like any other gateway tool call.
+      const [row] = await db
+        .select()
+        .from(schema.mcpToolCallsTable)
+        .where(eq(schema.mcpToolCallsTable.agentId, agentId));
+      expect(row).toBeDefined();
+      expect(row?.ownerType).toBe("agent");
+      expect(row?.mcpServerName).toBe("Clock App");
+      expect((row?.toolCall as { name?: string } | null)?.name).toBe(
+        openTool.name,
+      );
+    });
+  });
+
   describe("executeToolCallForOwner", () => {
     test("returns error when tool not found for agent", async () => {
       const toolCall = {
@@ -388,6 +533,43 @@ describe("McpClient", () => {
         (result._meta as { archestraError?: { code?: string } } | undefined)
           ?.archestraError?.code,
       ).toBe("unknown_tool");
+    });
+
+    test("a retained static assignment whose connection was uninstalled returns a typed reconnect error", async () => {
+      // A catalog with no installed connection (the pinned install was removed).
+      const orphanCatalog = await InternalMcpCatalogModel.create({
+        name: "orphan-mcp-server",
+        serverType: "remote",
+        serverUrl: "https://example.invalid/mcp/",
+      });
+      const tool = await ToolModel.createToolIfNotExists({
+        name: "orphan-mcp-server__do_thing",
+        description: "needs a connection",
+        parameters: {},
+        catalogId: orphanCatalog.id,
+      });
+      // Retained assignment after uninstall: still static, but the server
+      // binding is null and the catalog has no install.
+      await AgentToolModel.create(agentId, tool.id, {
+        mcpServerId: null,
+        credentialResolutionMode: "static",
+      });
+
+      const result = await mcpClient.executeToolCallForOwner(
+        { id: "call_orphan", name: tool.name, arguments: {} },
+        agentOwner(agentId),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(
+        (result._meta as { archestraError?: { type?: string } } | undefined)
+          ?.archestraError?.type,
+      ).toBe("auth_required");
+      // Reconnect-framed wording (not the "no credentials" auth message).
+      expect(result.error).toContain("reconnect");
+      expect(result.error).toContain("is not connected");
+      // The call is refused before any dispatch is attempted.
+      expect(mockCallTool).not.toHaveBeenCalled();
     });
 
     test("declares MCP Apps and enterprise auth extensions during initialize", async () => {
@@ -1233,10 +1415,14 @@ describe("McpClient", () => {
         expect(mockGetHttpEndpointUrl).toHaveBeenCalledWith(localMcpServerId);
 
         // Verify tool was called via HTTP client
-        expect(mockCallTool).toHaveBeenCalledWith({
-          name: "test_tool", // Server prefix stripped
-          arguments: { input: "test" },
-        });
+        expect(mockCallTool).toHaveBeenCalledWith(
+          {
+            name: "test_tool", // Server prefix stripped
+            arguments: { input: "test" },
+          },
+          undefined,
+          { signal: undefined },
+        );
 
         // Verify result
 
@@ -1353,10 +1539,14 @@ describe("McpClient", () => {
         expect(mockK8sDeployment.getRunningPodName).toHaveBeenCalled();
 
         // Verify MCP SDK client was used
-        expect(mockCallTool).toHaveBeenCalledWith({
-          name: "stdio_tool",
-          arguments: { input: "test" },
-        });
+        expect(mockCallTool).toHaveBeenCalledWith(
+          {
+            name: "stdio_tool",
+            arguments: { input: "test" },
+          },
+          undefined,
+          { signal: undefined },
+        );
 
         // Verify result
         expect(result).toMatchObject({
@@ -1468,10 +1658,14 @@ describe("McpClient", () => {
         );
 
         // Verify the tool was called with just the tool name (stripped using catalogName)
-        expect(mockCallTool).toHaveBeenCalledWith({
-          name: "prefix_test_tool",
-          arguments: {},
-        });
+        expect(mockCallTool).toHaveBeenCalledWith(
+          {
+            name: "prefix_test_tool",
+            arguments: {},
+          },
+          undefined,
+          { signal: undefined },
+        );
 
         expect(result).toMatchObject({
           id: "call_prefix_test",
@@ -1523,10 +1717,14 @@ describe("McpClient", () => {
         );
 
         // Verify stripping worked using mcpServerName fallback
-        expect(mockCallTool).toHaveBeenCalledWith({
-          name: "fallback_tool",
-          arguments: {},
-        });
+        expect(mockCallTool).toHaveBeenCalledWith(
+          {
+            name: "fallback_tool",
+            arguments: {},
+          },
+          undefined,
+          { signal: undefined },
+        );
 
         expect(result).toMatchObject({
           id: "call_fallback_test",
@@ -1568,10 +1766,14 @@ describe("McpClient", () => {
         );
 
         // Verify the tool name was not mangled since no prefix matched
-        expect(mockCallTool).toHaveBeenCalledWith({
-          name: "standalone_tool_name",
-          arguments: {},
-        });
+        expect(mockCallTool).toHaveBeenCalledWith(
+          {
+            name: "standalone_tool_name",
+            arguments: {},
+          },
+          undefined,
+          { signal: undefined },
+        );
 
         expect(result).toMatchObject({
           id: "call_identity_test",
@@ -1682,6 +1884,61 @@ describe("McpClient", () => {
         expect(result?.structuredContent).toMatchObject({
           archestraError: {
             type: "auth_required",
+          },
+        });
+      });
+
+      test("shows the catalog name (not the catalog UUID) for an unassigned all-tools tool that needs auth", async ({
+        makeUser,
+      }) => {
+        const testUser = await makeUser({ email: "alltools-auth@example.com" });
+
+        // A catalog the agent was never assigned a tool from. In "All tools"
+        // mode the dispatcher pre-resolves the tool and passes it through as
+        // `availableTool`, so the assignment carries no catalogName.
+        const dynCatalog = await InternalMcpCatalogModel.create({
+          name: "Atlassian Cloud MCP",
+          serverType: "remote",
+          serverUrl: "https://mcp.atlassian.com/v1/mcp",
+        });
+
+        const availableTool = await ToolModel.createToolIfNotExists({
+          name: "atlassian-cloud-mcp__search_issues",
+          description: "Search Jira issues",
+          parameters: {},
+          catalogId: dynCatalog.id,
+        });
+
+        const result = await mcpClient.executeToolCallForOwner(
+          {
+            id: "call_alltools_auth",
+            name: availableTool.name,
+            arguments: { query: "test" },
+          },
+          agentOwner(agentId),
+          {
+            tokenId: "test-token",
+            teamId: null,
+            isOrganizationToken: false,
+            userId: testUser.id,
+          },
+          // Dynamic tool access: the tool is not assigned to the agent.
+          { availableTool },
+        );
+
+        expect(result.isError).toBe(true);
+        // The user-facing name must be the catalog's display name, never its UUID.
+        expect(result?.error).toContain(
+          'Authentication required for "Atlassian Cloud MCP"',
+        );
+        expect(result?.error).not.toContain(
+          `Authentication required for "${dynCatalog.id}"`,
+        );
+        expect(result?._meta).toMatchObject({
+          archestraError: {
+            type: "auth_required",
+            catalogId: dynCatalog.id,
+            catalogName: "Atlassian Cloud MCP",
           },
         });
       });
@@ -2941,7 +3198,7 @@ describe("McpClient", () => {
               refresh_token: "refresh-token",
               expires_at: Date.now() + 3_600_000,
             });
-            return true;
+            return { ok: true };
           });
 
         mockConnect.mockResolvedValue(undefined);
@@ -3073,6 +3330,308 @@ describe("McpClient", () => {
             },
           ],
         });
+
+        refreshSpy.mockRestore();
+      });
+
+      test("a terminal refresh failure records the needs-reauthentication trio on the server row", async ({
+        makeUser,
+      }) => {
+        const testUser = await makeUser({
+          email: "oauth-terminal-persist@example.com",
+        });
+
+        const oauthCatalog = await InternalMcpCatalogModel.create({
+          name: "jira-terminal-persist-server",
+          serverType: "remote",
+          serverUrl: "https://mcp.atlassian.example.com/mcp/",
+          oauthConfig: {
+            name: "Jira",
+            server_url: "https://mcp.atlassian.example.com/mcp/",
+            client_id: "test-client-id",
+            redirect_uris: ["http://localhost:3000/callback"],
+            scopes: ["read:jira-work"],
+            default_scopes: ["read:jira-work"],
+            supports_resource_metadata: false,
+          },
+        });
+
+        const secret = await secretManager().createSecret(
+          {
+            access_token: "expired-token",
+            refresh_token: "refresh-token",
+            expires_at: Date.now() + 24 * 3_600_000,
+          },
+          "jira-terminal-persist-secret",
+        );
+
+        const mcpServer = await McpServerModel.create({
+          name: "jira-terminal-persist-server",
+          catalogId: oauthCatalog.id,
+          secretId: secret.id,
+          serverType: "remote",
+          ownerId: testUser.id,
+        });
+
+        const tool = await ToolModel.createToolIfNotExists({
+          name: "jira-terminal-persist-server__get_issue",
+          description: "Get issue",
+          parameters: {},
+          catalogId: oauthCatalog.id,
+        });
+
+        await AgentToolModel.create(agentId, tool.id, {
+          mcpServerId: mcpServer.id,
+        });
+
+        const refreshSpy = vi
+          .spyOn(oauthRoutes, "refreshOAuthToken")
+          .mockResolvedValue({
+            ok: false,
+            kind: "terminal",
+            category: "refresh_failed",
+            message: "invalid_grant",
+          });
+
+        mockConnect.mockResolvedValue(undefined);
+        mockCallTool.mockResolvedValue({
+          content: [
+            {
+              type: "text",
+              text: "Authentication failed: access token expired",
+            },
+          ],
+          isError: true,
+        });
+
+        await mcpClient.executeToolCallForOwner(
+          {
+            id: "call_terminal_persist",
+            name: "jira-terminal-persist-server__get_issue",
+            arguments: { issue_key: "CTAZ-1015" },
+          },
+          agentOwner(agentId),
+          {
+            tokenId: "test-token",
+            teamId: null,
+            isOrganizationToken: false,
+            userId: testUser.id,
+          },
+        );
+
+        const row = await McpServerModel.findById(mcpServer.id);
+        expect(row?.oauthRefreshError).toBe("refresh_failed");
+        expect(row?.oauthRefreshErrorMessage).toBe("invalid_grant");
+        expect(row?.oauthRefreshFailedAt).toBeInstanceOf(Date);
+
+        refreshSpy.mockRestore();
+      });
+
+      test("a transient refresh failure persists nothing, leaving prior connection health untouched", async ({
+        makeUser,
+      }) => {
+        const testUser = await makeUser({
+          email: "oauth-transient-no-persist@example.com",
+        });
+
+        const oauthCatalog = await InternalMcpCatalogModel.create({
+          name: "jira-transient-persist-server",
+          serverType: "remote",
+          serverUrl: "https://mcp.atlassian.example.com/mcp/",
+          oauthConfig: {
+            name: "Jira",
+            server_url: "https://mcp.atlassian.example.com/mcp/",
+            client_id: "test-client-id",
+            redirect_uris: ["http://localhost:3000/callback"],
+            scopes: ["read:jira-work"],
+            default_scopes: ["read:jira-work"],
+            supports_resource_metadata: false,
+          },
+        });
+
+        const secret = await secretManager().createSecret(
+          {
+            access_token: "expired-token",
+            refresh_token: "refresh-token",
+            expires_at: Date.now() + 24 * 3_600_000,
+          },
+          "jira-transient-persist-secret",
+        );
+
+        const mcpServer = await McpServerModel.create({
+          name: "jira-transient-persist-server",
+          catalogId: oauthCatalog.id,
+          secretId: secret.id,
+          serverType: "remote",
+          ownerId: testUser.id,
+        });
+
+        // Pre-seed a prior terminal failure: a transient outcome must neither
+        // set nor clear health, so this state must survive unchanged.
+        const priorFailedAt = new Date(Date.now() - 60_000);
+        await McpServerModel.update(mcpServer.id, {
+          oauthRefreshError: "refresh_failed",
+          oauthRefreshErrorMessage: "invalid_grant",
+          oauthRefreshFailedAt: priorFailedAt,
+        });
+
+        const tool = await ToolModel.createToolIfNotExists({
+          name: "jira-transient-persist-server__get_issue",
+          description: "Get issue",
+          parameters: {},
+          catalogId: oauthCatalog.id,
+        });
+
+        await AgentToolModel.create(agentId, tool.id, {
+          mcpServerId: mcpServer.id,
+        });
+
+        const refreshSpy = vi
+          .spyOn(oauthRoutes, "refreshOAuthToken")
+          .mockResolvedValue({
+            ok: false,
+            kind: "transient",
+            reason: "server_error",
+          });
+
+        mockConnect.mockResolvedValue(undefined);
+        mockCallTool.mockResolvedValue({
+          content: [
+            {
+              type: "text",
+              text: "Authentication failed: access token expired",
+            },
+          ],
+          isError: true,
+        });
+
+        await mcpClient.executeToolCallForOwner(
+          {
+            id: "call_transient_persist",
+            name: "jira-transient-persist-server__get_issue",
+            arguments: { issue_key: "CTAZ-1015" },
+          },
+          agentOwner(agentId),
+          {
+            tokenId: "test-token",
+            teamId: null,
+            isOrganizationToken: false,
+            userId: testUser.id,
+          },
+        );
+
+        const row = await McpServerModel.findById(mcpServer.id);
+        expect(row?.oauthRefreshError).toBe("refresh_failed");
+        expect(row?.oauthRefreshErrorMessage).toBe("invalid_grant");
+        expect(row?.oauthRefreshFailedAt?.getTime()).toBe(
+          priorFailedAt.getTime(),
+        );
+
+        refreshSpy.mockRestore();
+      });
+
+      test("a successful refresh clears a prior needs-reauthentication state", async ({
+        makeUser,
+      }) => {
+        const testUser = await makeUser({
+          email: "oauth-success-clears@example.com",
+        });
+
+        const oauthCatalog = await InternalMcpCatalogModel.create({
+          name: "jira-success-clears-server",
+          serverType: "remote",
+          serverUrl: "https://mcp.atlassian.example.com/mcp/",
+          oauthConfig: {
+            name: "Jira",
+            server_url: "https://mcp.atlassian.example.com/mcp/",
+            client_id: "test-client-id",
+            redirect_uris: ["http://localhost:3000/callback"],
+            scopes: ["read:jira-work"],
+            default_scopes: ["read:jira-work"],
+            supports_resource_metadata: false,
+          },
+        });
+
+        const secret = await secretManager().createSecret(
+          {
+            access_token: "expired-token",
+            refresh_token: "refresh-token",
+            expires_at: Date.now() + 24 * 3_600_000,
+          },
+          "jira-success-clears-secret",
+        );
+
+        const mcpServer = await McpServerModel.create({
+          name: "jira-success-clears-server",
+          catalogId: oauthCatalog.id,
+          secretId: secret.id,
+          serverType: "remote",
+          ownerId: testUser.id,
+        });
+
+        await McpServerModel.update(mcpServer.id, {
+          oauthRefreshError: "refresh_failed",
+          oauthRefreshErrorMessage: "invalid_grant",
+          oauthRefreshFailedAt: new Date(Date.now() - 60_000),
+        });
+
+        const tool = await ToolModel.createToolIfNotExists({
+          name: "jira-success-clears-server__get_issue",
+          description: "Get issue",
+          parameters: {},
+          catalogId: oauthCatalog.id,
+        });
+
+        await AgentToolModel.create(agentId, tool.id, {
+          mcpServerId: mcpServer.id,
+        });
+
+        const refreshSpy = vi
+          .spyOn(oauthRoutes, "refreshOAuthToken")
+          .mockImplementation(async () => {
+            await secretManager().updateSecret(secret.id, {
+              access_token: "refreshed-token",
+              refresh_token: "refresh-token",
+              expires_at: Date.now() + 3_600_000,
+            });
+            return { ok: true };
+          });
+
+        mockConnect.mockResolvedValue(undefined);
+        mockCallTool
+          .mockResolvedValueOnce({
+            content: [
+              {
+                type: "text",
+                text: "Authentication failed: access token expired",
+              },
+            ],
+            isError: true,
+          })
+          .mockResolvedValueOnce({
+            content: [{ type: "text", text: "Issue fetched" }],
+            isError: false,
+          });
+
+        await mcpClient.executeToolCallForOwner(
+          {
+            id: "call_success_clears",
+            name: "jira-success-clears-server__get_issue",
+            arguments: { issue_key: "CTAZ-1015" },
+          },
+          agentOwner(agentId),
+          {
+            tokenId: "test-token",
+            teamId: null,
+            isOrganizationToken: false,
+            userId: testUser.id,
+          },
+        );
+
+        const row = await McpServerModel.findById(mcpServer.id);
+        expect(row?.oauthRefreshError).toBeNull();
+        expect(row?.oauthRefreshErrorMessage).toBeNull();
+        expect(row?.oauthRefreshFailedAt).toBeNull();
 
         refreshSpy.mockRestore();
       });
@@ -3227,7 +3786,7 @@ describe("McpClient", () => {
               refresh_token: "refresh-token",
               expires_at: Date.now() + 3_600_000,
             });
-            return true;
+            return { ok: true };
           });
 
         mockConnect.mockResolvedValue(undefined);
@@ -3313,7 +3872,12 @@ describe("McpClient", () => {
 
         const refreshSpy = vi
           .spyOn(oauthRoutes, "refreshOAuthToken")
-          .mockResolvedValue(false);
+          .mockResolvedValue({
+            ok: false,
+            kind: "terminal",
+            category: "refresh_failed",
+            message: "refresh_failed",
+          });
 
         mockConnect.mockResolvedValue(undefined);
         mockCallTool.mockResolvedValue({
@@ -3451,7 +4015,7 @@ describe("McpClient", () => {
               refresh_token: "rotated-refresh-token",
               expires_at: Date.now() + 3_600_000,
             });
-            return true;
+            return { ok: true };
           });
 
         const toolCall = {
@@ -3593,6 +4157,81 @@ describe("McpClient", () => {
             reauthUrl: `${config.frontendBaseUrl}${MCP_CATALOG_INSTALL_PATH}?${MCP_CATALOG_REAUTH_QUERY_PARAM}=${oauthCatalog.id}&${MCP_CATALOG_SERVER_QUERY_PARAM}=${mcpServer.id}`,
           },
         });
+      });
+
+      test("records a no_refresh_token state when an OAuth tool call throws UnauthorizedError and no refresh token is stored", async ({
+        makeUser,
+      }) => {
+        const testUser = await makeUser({
+          email: "oauth-no-refresh-record@example.com",
+        });
+
+        const oauthCatalog = await InternalMcpCatalogModel.create({
+          name: "github-no-refresh-server",
+          serverType: "remote",
+          serverUrl: "https://api.githubcopilot.com/mcp/",
+          oauthConfig: {
+            name: "GitHub",
+            server_url: "https://api.githubcopilot.com/mcp/",
+            client_id: "test-client-id",
+            redirect_uris: ["http://localhost:3000/callback"],
+            scopes: ["repo"],
+            default_scopes: ["repo"],
+            supports_resource_metadata: false,
+          },
+        });
+
+        // Secret WITHOUT a refresh token — refresh is impossible, so an auth
+        // error must record the terminal no_refresh_token state on the row.
+        const secret = await secretManager().createSecret(
+          { access_token: "expired-token" },
+          "no-refresh-record-secret",
+        );
+
+        const mcpServer = await McpServerModel.create({
+          name: "github-no-refresh-server",
+          catalogId: oauthCatalog.id,
+          secretId: secret.id,
+          serverType: "remote",
+          ownerId: testUser.id,
+        });
+
+        const tool = await ToolModel.createToolIfNotExists({
+          name: "github-no-refresh-server__list_repos",
+          description: "List repos",
+          parameters: {},
+          catalogId: oauthCatalog.id,
+        });
+
+        await AgentToolModel.create(agentId, tool.id, {
+          mcpServerId: mcpServer.id,
+        });
+
+        const { UnauthorizedError } = await import(
+          "@modelcontextprotocol/sdk/client/auth.js"
+        );
+        mockCallTool.mockRejectedValueOnce(new UnauthorizedError());
+        mockConnect.mockResolvedValue(undefined);
+
+        await mcpClient.executeToolCallForOwner(
+          {
+            id: "call_no_refresh_record",
+            name: "github-no-refresh-server__list_repos",
+            arguments: {},
+          },
+          agentOwner(agentId),
+          {
+            tokenId: "test-token",
+            teamId: null,
+            isOrganizationToken: false,
+            userId: testUser.id,
+          },
+        );
+
+        const row = await McpServerModel.findById(mcpServer.id);
+        expect(row?.oauthRefreshError).toBe("no_refresh_token");
+        expect(row?.oauthRefreshErrorMessage).toBe("no_refresh_token");
+        expect(row?.oauthRefreshFailedAt).toBeInstanceOf(Date);
       });
 
       test("returns expired-auth message with manage URL when tool call throws StreamableHTTPError 401 on OAuth server", async ({
@@ -4190,6 +4829,64 @@ describe("McpClient", () => {
         // callTool should have been called twice (first stale, then fresh)
         expect(mockCallTool).toHaveBeenCalledTimes(2);
       });
+
+      test("skips the stale-session retry when the call is aborted", async () => {
+        const { StreamableHTTPError } = await import(
+          "@modelcontextprotocol/sdk/client/streamableHttp.js"
+        );
+
+        const tool = await ToolModel.createToolIfNotExists({
+          name: "stale-session-server__aborted_no_retry",
+          description: "Test tool",
+          parameters: {},
+          catalogId: localCatalogId,
+        });
+        await AgentToolModel.create(agentId, tool.id, {
+          mcpServerId: localMcpServerId,
+        });
+
+        mockUsesStreamableHttp.mockResolvedValue(true);
+        mockGetHttpEndpointUrl.mockReturnValue("http://localhost:30123/mcp");
+        vi.spyOn(
+          McpHttpSessionModel,
+          "findRecordByConnectionKey",
+        ).mockResolvedValue({
+          sessionId: "stale-session-id",
+          sessionEndpointUrl: null,
+          sessionEndpointPodName: null,
+        });
+        mockConnect.mockResolvedValue(undefined);
+
+        // The sibling test above proves this exact error triggers a
+        // fresh-session retry. With the run aborted, the abort guard must
+        // short-circuit before that retry — no second callTool, no session
+        // teardown — and propagate the abort.
+        mockCallTool.mockRejectedValue(
+          new StreamableHTTPError(
+            404,
+            "Error POSTing to endpoint: Session not found",
+          ),
+        );
+
+        const controller = new AbortController();
+        controller.abort();
+
+        await expect(
+          mcpClient.executeToolCallForOwner(
+            {
+              id: "call_aborted_no_retry",
+              name: "stale-session-server__aborted_no_retry",
+              arguments: {},
+            },
+            agentOwner(agentId),
+            undefined,
+            { abortSignal: controller.signal },
+          ),
+        ).rejects.toThrow();
+
+        expect(mockCallTool).toHaveBeenCalledTimes(1);
+        expect(McpHttpSessionModel.deleteStaleSession).not.toHaveBeenCalled();
+      });
     });
 
     describe("Tool name casing resolution", () => {
@@ -4228,10 +4925,14 @@ describe("McpClient", () => {
         await mcpClient.executeToolCallForOwner(toolCall, agentOwner(agentId));
 
         // Verify callTool was called with the original camelCase name
-        expect(mockCallTool).toHaveBeenCalledWith({
-          name: "getUserInfo",
-          arguments: {},
-        });
+        expect(mockCallTool).toHaveBeenCalledWith(
+          {
+            name: "getUserInfo",
+            arguments: {},
+          },
+          undefined,
+          { signal: undefined },
+        );
       });
 
       test("resolves PascalCase tool name from remote server", async () => {
@@ -4264,10 +4965,14 @@ describe("McpClient", () => {
 
         await mcpClient.executeToolCallForOwner(toolCall, agentOwner(agentId));
 
-        expect(mockCallTool).toHaveBeenCalledWith({
-          name: "GetRepository",
-          arguments: {},
-        });
+        expect(mockCallTool).toHaveBeenCalledWith(
+          {
+            name: "GetRepository",
+            arguments: {},
+          },
+          undefined,
+          { signal: undefined },
+        );
       });
 
       test("falls back to stripped name when listTools fails", async () => {
@@ -4299,10 +5004,14 @@ describe("McpClient", () => {
         await mcpClient.executeToolCallForOwner(toolCall, agentOwner(agentId));
 
         // Falls back to the lowercased stripped name
-        expect(mockCallTool).toHaveBeenCalledWith({
-          name: "sometool",
-          arguments: {},
-        });
+        expect(mockCallTool).toHaveBeenCalledWith(
+          {
+            name: "sometool",
+            arguments: {},
+          },
+          undefined,
+          { signal: undefined },
+        );
       });
 
       test("falls back to stripped name when tool not in server list", async () => {
@@ -4336,10 +5045,14 @@ describe("McpClient", () => {
         await mcpClient.executeToolCallForOwner(toolCall, agentOwner(agentId));
 
         // Falls back to stripped name since no match found
-        expect(mockCallTool).toHaveBeenCalledWith({
-          name: "missingtool",
-          arguments: {},
-        });
+        expect(mockCallTool).toHaveBeenCalledWith(
+          {
+            name: "missingtool",
+            arguments: {},
+          },
+          undefined,
+          { signal: undefined },
+        );
       });
 
       test("preserves already-correct lowercase tool name", async () => {
@@ -4372,10 +5085,14 @@ describe("McpClient", () => {
 
         await mcpClient.executeToolCallForOwner(toolCall, agentOwner(agentId));
 
-        expect(mockCallTool).toHaveBeenCalledWith({
-          name: "search_issues",
-          arguments: {},
-        });
+        expect(mockCallTool).toHaveBeenCalledWith(
+          {
+            name: "search_issues",
+            arguments: {},
+          },
+          undefined,
+          { signal: undefined },
+        );
       });
     });
 

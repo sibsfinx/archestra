@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { assembleFileSections } from "@/lib/chat/conversation-files";
+import {
+  assembleFileSections,
+  type ConversationFileItem,
+  deleteTargetFor,
+  persistentFilesSection,
+} from "@/lib/chat/conversation-files";
+
+function fileItem(
+  source: ConversationFileItem["source"],
+  id = source,
+): ConversationFileItem {
+  return {
+    id,
+    name: `${id}.bin`,
+    mimeType: "text/plain",
+    contentUrl: "",
+    source,
+  };
+}
 
 const apiFiles = {
   generated: [
@@ -30,6 +48,7 @@ const apiFiles = {
     },
   ],
   projectName: "hello",
+  canManageFiles: true,
 };
 
 describe("assembleFileSections", () => {
@@ -94,5 +113,38 @@ describe("assembleFileSections", () => {
         source: "project",
       },
     ]);
+  });
+});
+
+describe("persistentFilesSection", () => {
+  it("labels a project chat's persistent files as shared with the project", () => {
+    expect(persistentFilesSection("proj_1")).toEqual({
+      title: "Project files",
+      description: "shared with the whole project",
+    });
+  });
+
+  it("labels a personal chat's persistent files as chat-scoped", () => {
+    const chatScoped = {
+      title: "Chat files",
+      description: "saved to a project if you create one from this chat",
+    };
+    expect(persistentFilesSection(null)).toEqual(chatScoped);
+    expect(persistentFilesSection(undefined)).toEqual(chatScoped);
+  });
+});
+
+describe("deleteTargetFor", () => {
+  it("routes attachments to the attachment endpoint", () => {
+    expect(deleteTargetFor(fileItem("attachment"))).toEqual({
+      kind: "attachment",
+    });
+  });
+
+  it("routes generated and project files to the artifact endpoint", () => {
+    expect(deleteTargetFor(fileItem("generated"))).toEqual({
+      kind: "artifact",
+    });
+    expect(deleteTargetFor(fileItem("project"))).toEqual({ kind: "artifact" });
   });
 });

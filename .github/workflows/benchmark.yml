@@ -35,7 +35,7 @@ jobs:
       id-token: write # Workload Identity Federation + GKE credentials
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           fetch-depth: 1
@@ -143,13 +143,16 @@ jobs:
       - name: Create bench secret
         env:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SLACK_BENCH_WEBHOOK_URL: ${{ secrets.SLACK_BENCH_WEBHOOK_URL }}
         run: |
           set -euo pipefail
-          # The pod reads both: the glm lane key and (optionally, empty when unset) the Slack webhook it
-          # posts the summary to. Recreated each run; left in place since the pod needs it after CI exits.
+          # The pod reads: the glm lane key, the OpenRouter key for the OR-served lanes, and (optionally,
+          # empty when unset) the Slack webhook it posts the summary to. Recreated each run; left in place
+          # since the pod needs it after CI exits.
           kubectl create secret generic archestra-bench-secrets -n archestra \
             --from-literal=ZAI_API_KEY="${ZAI_API_KEY}" \
+            --from-literal=OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
             --from-literal=SLACK_BENCH_WEBHOOK_URL="${SLACK_BENCH_WEBHOOK_URL:-}" \
             --dry-run=client -o yaml | kubectl apply -f -
 

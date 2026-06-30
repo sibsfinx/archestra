@@ -19,7 +19,7 @@ import {
   TOOL_RENDER_APP_SHORT_NAME,
   TOOL_RUN_COMMAND_FULL_NAME,
   TOOL_RUN_TOOL_FULL_NAME,
-  TOOL_SAVE_RESULT_FULL_NAME,
+  TOOL_SAVE_FILE_FULL_NAME,
   TOOL_SCAFFOLD_APP_SHORT_NAME,
   TOOL_SEARCH_FILES_FULL_NAME,
   TOOL_SEARCH_TOOLS_FULL_NAME,
@@ -208,6 +208,85 @@ describe("MCP Gateway (stateless mode)", () => {
       // If error, it should be "Server not initialized", not a session error
       expect(body.error?.message).toContain("Server not initialized");
     }
+  });
+
+  test("derives a human 'Open <app>' title for an app launch tool, leaving its slug name and other tools' titles untouched", async ({
+    makeAgent,
+    makeOrganization,
+    makeInternalMcpCatalog,
+    makeTool,
+    makeAgentTool,
+  }) => {
+    const org = await makeOrganization();
+    const agent = await makeAgent({
+      organizationId: org.id,
+      agentType: "mcp_gateway",
+      toolExposureMode: "full",
+      accessAllTools: false,
+    });
+
+    // An app backing (serverType "app") whose catalog name is the human app name.
+    const appCatalog = await makeInternalMcpCatalog({
+      organizationId: org.id,
+      name: "Bug Tracker",
+      serverType: "app",
+      scope: "org",
+    });
+    // The launch tool keeps its unique, id-suffixed slug name and stores no title.
+    const launchTool = await makeTool({
+      catalogId: appCatalog.id,
+      name: "bug_tracker-1a2b3c4d__open",
+      description: 'Open the "Bug Tracker" app and render its UI.',
+      meta: { _meta: { ui: { resourceUri: "ui://archestra/app/1a2b3c4d" } } },
+    });
+    await makeAgentTool(agent.id, launchTool.id, {
+      credentialResolutionMode: "dynamic",
+    });
+
+    // A regular (non-app) tool to prove the derivation is app-only.
+    const remoteCatalog = await makeInternalMcpCatalog({
+      organizationId: org.id,
+      name: "Linear",
+      serverType: "remote",
+      serverUrl: "https://example.com/mcp",
+      scope: "org",
+    });
+    const remoteTool = await makeTool({
+      catalogId: remoteCatalog.id,
+      name: "linear_search_issues",
+    });
+    await makeAgentTool(agent.id, remoteTool.id, {
+      credentialResolutionMode: "dynamic",
+    });
+
+    const token = await TeamTokenModel.create({
+      organizationId: org.id,
+      name: "Org Token",
+      teamId: null,
+      isOrganizationToken: true,
+    });
+
+    await initializeMcpSession({ app, agentId: agent.id, token: token.value });
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/mcp/${agent.id}`,
+      headers: makeMcpHeaders(token.value),
+      payload: { jsonrpc: "2.0", method: "tools/list", params: {}, id: 2 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const tools: Array<{ name: string; title?: string }> =
+      response.json().result.tools;
+
+    const launch = tools.find((t) => t.name === "bug_tracker-1a2b3c4d__open");
+    expect(launch).toBeDefined();
+    // Slug name is preserved for invocation; only the display title is friendly.
+    expect(launch?.title).toBe("Open Bug Tracker");
+
+    const remote = tools.find((t) => t.name === "linear_search_issues");
+    expect(remote).toBeDefined();
+    // A non-app tool's title still falls back to its name — derivation is app-only.
+    expect(remote?.title).toBe("linear_search_issues");
   });
 
   test("returns 401 with WWW-Authenticate header for missing authorization header", async ({
@@ -504,6 +583,26 @@ describe("MCP Gateway (stateless mode)", () => {
     expect(body).toHaveProperty("transport", "http");
     expect(body).toHaveProperty("capabilities");
     expect(body.capabilities).toHaveProperty("tools", true);
+  });
+
+  test("GET endpoint serves discovery info without tokenAuth for an invalid token", async ({
+    makeAgent,
+  }) => {
+    const agent = await makeAgent();
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/mcp/${agent.id}`,
+      headers: makeMcpHeaders("archestra_invalid_token_12345"),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body).toHaveProperty("name", `archestra-agent-${agent.id}`);
+    expect(body).toHaveProperty("agentId", agent.id);
+    expect(body).toHaveProperty("transport", "http");
+    expect(body.capabilities).toHaveProperty("tools", true);
+    expect(body.tokenAuth).toBeUndefined();
   });
 
   test("handles whoami tool call successfully after initialize", async ({
@@ -1032,7 +1131,7 @@ describe("MCP Gateway (stateless mode)", () => {
           TOOL_READ_FILE_FULL_NAME,
           TOOL_RUN_COMMAND_FULL_NAME,
           TOOL_RUN_TOOL_FULL_NAME,
-          TOOL_SAVE_RESULT_FULL_NAME,
+          TOOL_SAVE_FILE_FULL_NAME,
           TOOL_SEARCH_FILES_FULL_NAME,
           TOOL_SEARCH_TOOLS_FULL_NAME,
           TOOL_UPLOAD_FILE_FULL_NAME,
@@ -1122,7 +1221,7 @@ describe("MCP Gateway (stateless mode)", () => {
       // Persistent-files tools are gated by the Projects flag — absent here.
       expect(toolNames).not.toContain(TOOL_SEARCH_FILES_FULL_NAME);
       expect(toolNames).not.toContain(TOOL_READ_FILE_FULL_NAME);
-      expect(toolNames).not.toContain(TOOL_SAVE_RESULT_FULL_NAME);
+      expect(toolNames).not.toContain(TOOL_SAVE_FILE_FULL_NAME);
       expect(toolNames).not.toContain(TOOL_EDIT_FILE_FULL_NAME);
       expect(toolNames).not.toContain(TOOL_DELETE_FILE_FULL_NAME);
     } finally {
