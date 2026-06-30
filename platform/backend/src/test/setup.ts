@@ -40,6 +40,8 @@ process.env.ARCHESTRA_PROJECTS_ENABLED = "true";
 // overriding config.fileStorage at runtime against a temp root.
 process.env.ARCHESTRA_FILE_STORAGE_PROVIDER = "db";
 process.env.ARCHESTRA_FILE_STORAGE_FILESYSTEM_ROOT = "";
+// Set auth secret for tests
+process.env.ARCHESTRA_AUTH_SECRET = "auth-secret-unit-tests-32-chars!";
 
 // Force in-memory mail capture for all backend tests. dotenv will not override
 // vars that are already set, so local .env mail settings cannot send real mail in CI.
