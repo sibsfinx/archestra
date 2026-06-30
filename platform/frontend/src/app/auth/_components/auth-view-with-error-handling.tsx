@@ -305,7 +305,7 @@ export function AuthViewWithErrorHandling({
     return () => {
       window.fetch = originalFetch;
     };
-  }, [path]);
+  }, []);
 
   if (path === "sign-out") {
     return <SignOutWithIdpLogout />;

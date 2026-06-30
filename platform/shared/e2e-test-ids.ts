@@ -4,6 +4,7 @@ export const E2eTestId = {
   CreateAgentCloseHowToConnectButton: "create-agent-how-to-connect-button",
   CloneAgentButton: "clone-agent-button",
   DeleteAgentButton: "delete-agent-button",
+  OnboardingWizardButton: "onboarding-wizard-button",
   OnboardingNextButton: "onboarding-next-button",
   OnboardingSkipButton: "onboarding-skip-button",
   SignInSubmitButton: "sign-in-submit-button",

@@ -55,10 +55,14 @@ export function settingsToDraft(
 
 export function canSaveDraft(draft: MailDraftState): boolean {
   if (draft.provider === "smtp") {
+    const port = Number.parseInt(draft.smtpPort, 10);
     return (
       draft.fromAddress.trim() !== "" &&
       draft.smtpHost.trim() !== "" &&
-      draft.smtpPort.trim() !== ""
+      draft.smtpPort.trim() !== "" &&
+      Number.isFinite(port) &&
+      port >= 1 &&
+      port <= 65535
     );
   }
   return true;

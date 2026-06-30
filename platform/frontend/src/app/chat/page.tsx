@@ -282,6 +282,9 @@ export function ChatPageContent({
   const { data: canUpdateAgent } = useHasPermissions({
     agent: ["team-admin"],
   });
+  const { data: canUpdateOrgSettings } = useHasPermissions({
+    organizationSettings: ["update"],
+  });
   const { data: canSeeAgentPicker, isLoading: isAgentPickerPermissionLoading } =
     useHasPermissions({
       chatAgentPicker: ["enable"],
@@ -2260,7 +2263,8 @@ export function ChatPageContent({
                   }}
                 >
                   {((organization?.chatLinks?.length ?? 0) > 0 ||
-                    organization?.onboardingWizard) && (
+                    organization?.onboardingWizard ||
+                    canUpdateOrgSettings === true) && (
                     <div className="absolute top-4 right-4 z-10 flex flex-wrap justify-end gap-2 max-w-[min(100%,36rem)]">
                       {organization?.chatLinks?.map((link) => (
                         <ChatLinkButton
@@ -2269,9 +2273,11 @@ export function ChatPageContent({
                           label={link.label}
                         />
                       ))}
-                      {organization?.onboardingWizard && (
+                      {(organization?.onboardingWizard ||
+                        canUpdateOrgSettings === true) && (
                         <OnboardingWizardButton
-                          wizard={organization.onboardingWizard}
+                          wizard={organization?.onboardingWizard ?? null}
+                          enableMailSetup={canUpdateOrgSettings === true}
                         />
                       )}
                     </div>
