@@ -1,11 +1,15 @@
-import { ADMIN_ROLE_NAME, EDITOR_ROLE_NAME, MEMBER_ROLE_NAME } from "@archestra/shared";
+import {
+  ADMIN_ROLE_NAME,
+  EDITOR_ROLE_NAME,
+  MEMBER_ROLE_NAME,
+} from "@archestra/shared";
 import { eq } from "drizzle-orm";
-import config from "@/config";
-import db, { schema } from "@/database";
 import {
   DUPLICATE_CONTENT_MESSAGE,
   MAX_CORE_ITEMS_PER_SCOPE,
 } from "@/archestra-mcp-server/memory";
+import config from "@/config";
+import db, { schema } from "@/database";
 import { OrganizationModel } from "@/models";
 import type { FastifyInstanceWithZod } from "@/server";
 import { createFastifyInstance } from "@/server";
@@ -14,7 +18,10 @@ import type { InsertMemory, User } from "@/types";
 import memoryRoutes from "./memory";
 
 async function seedMemory(values: InsertMemory) {
-  const [row] = await db.insert(schema.memoriesTable).values(values).returning();
+  const [row] = await db
+    .insert(schema.memoriesTable)
+    .values(values)
+    .returning();
   return row;
 }
 
@@ -402,7 +409,7 @@ describe("PATCH /api/memory/:id", () => {
 
     const response = await app.inject({
       method: "PATCH",
-      url: `/api/memory/${memory!.id}`,
+      url: `/api/memory/${memory?.id}`,
       payload: { content: "hijacked" },
     });
 
@@ -435,7 +442,7 @@ describe("PATCH /api/memory/:id", () => {
 
     const response = await app.inject({
       method: "PATCH",
-      url: `/api/memory/${second!.id}`,
+      url: `/api/memory/${second?.id}`,
       payload: { content: "route-existing-content" },
     });
 
@@ -445,9 +452,9 @@ describe("PATCH /api/memory/:id", () => {
     const unchanged = await db
       .select()
       .from(schema.memoriesTable)
-      .where(eq(schema.memoriesTable.id, second!.id));
+      .where(eq(schema.memoriesTable.id, second?.id));
     expect(unchanged[0]?.content).toBe("route-other-content");
-    expect(first!.id).not.toBe(second!.id);
+    expect(first?.id).not.toBe(second?.id);
   });
 
   test("cross-org memory id returns 404 on patch and delete", async ({
@@ -471,21 +478,21 @@ describe("PATCH /api/memory/:id", () => {
 
     const patchResponse = await app.inject({
       method: "PATCH",
-      url: `/api/memory/${foreign!.id}`,
+      url: `/api/memory/${foreign?.id}`,
       payload: { content: "should-not-apply" },
     });
     expect(patchResponse.statusCode).toBe(404);
 
     const deleteResponse = await app.inject({
       method: "DELETE",
-      url: `/api/memory/${foreign!.id}`,
+      url: `/api/memory/${foreign?.id}`,
     });
     expect(deleteResponse.statusCode).toBe(404);
 
     const unchanged = await db
       .select()
       .from(schema.memoriesTable)
-      .where(eq(schema.memoriesTable.id, foreign!.id));
+      .where(eq(schema.memoriesTable.id, foreign?.id));
     expect(unchanged[0]?.content).toBe("foreign-org-memory");
   });
 
@@ -518,7 +525,7 @@ describe("PATCH /api/memory/:id", () => {
     actingUser = teamAdminOutsider;
     const response = await app.inject({
       method: "PATCH",
-      url: `/api/memory/${memory!.id}`,
+      url: `/api/memory/${memory?.id}`,
       payload: { content: "outsider-edit" },
     });
 
@@ -527,7 +534,7 @@ describe("PATCH /api/memory/:id", () => {
     const unchanged = await db
       .select()
       .from(schema.memoriesTable)
-      .where(eq(schema.memoriesTable.id, memory!.id));
+      .where(eq(schema.memoriesTable.id, memory?.id));
     expect(unchanged[0]?.content).toBe("protected-team-memory");
   });
 });
@@ -567,7 +574,7 @@ describe("DELETE /api/memory/:id", () => {
 
     const response = await app.inject({
       method: "DELETE",
-      url: `/api/memory/${memory!.id}`,
+      url: `/api/memory/${memory?.id}`,
     });
 
     expect(response.statusCode).toBe(403);
@@ -602,7 +609,7 @@ describe("DELETE /api/memory/:id", () => {
     actingUser = teamAdminOutsider;
     const response = await app.inject({
       method: "DELETE",
-      url: `/api/memory/${memory!.id}`,
+      url: `/api/memory/${memory?.id}`,
     });
 
     expect(response.statusCode).toBe(403);
@@ -610,7 +617,7 @@ describe("DELETE /api/memory/:id", () => {
     const stillThere = await db
       .select()
       .from(schema.memoriesTable)
-      .where(eq(schema.memoriesTable.id, memory!.id));
+      .where(eq(schema.memoriesTable.id, memory?.id));
     expect(stillThere).toHaveLength(1);
   });
 });

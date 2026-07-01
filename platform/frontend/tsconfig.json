@@ -40,9 +40,7 @@
     ".next/dev/types/**/*.ts",
     ".next-pw/types/**/*.ts",
     ".next-pw/dev/types/**/*.ts",
-    ".next-pw/dev/dev/types/**/*.ts",
-    ".next-pw-memory-demo/types/**/*.ts",
-    ".next-pw-memory-demo/dev/types/**/*.ts"
+    ".next-pw/dev/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

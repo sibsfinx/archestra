@@ -18,6 +18,7 @@ import {
   makeLlmProviderApiKey,
   virtualKeysSeed,
 } from "./data/llm-keys";
+import { type MockMemory, makeMemory, memoriesSeed } from "./data/memory";
 import {
   appearanceSettingsSeed,
   organizationSeed,
@@ -37,7 +38,6 @@ import {
   skillCatalogSearchSeed,
   skillsListSeed,
 } from "./data/skills";
-import { makeMemory, memoriesSeed, type MockMemory } from "./data/memory";
 
 // Register each endpoint twice: absolute URL for SSR (Next.js server
 // components fetch the backend origin directly) and relative URL for the

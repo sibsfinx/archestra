@@ -6,11 +6,7 @@ import {
 } from "fastify-type-provider-zod";
 import { type Mock, vi } from "vitest";
 import { hasPermission } from "@/auth";
-import {
-  InternalMcpCatalogModel,
-  McpServerModel,
-  OrganizationModel,
-} from "@/models";
+import { InternalMcpCatalogModel } from "@/models";
 import { autoReinstallServer } from "@/services/mcp-reinstall";
 import { afterEach, beforeEach, describe, expect, test } from "@/test";
 import { ApiError, type User } from "@/types";

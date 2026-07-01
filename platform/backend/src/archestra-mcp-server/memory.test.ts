@@ -7,9 +7,8 @@ import {
 import { count, eq } from "drizzle-orm";
 import db, { schema } from "@/database";
 import { OrganizationModel } from "@/models";
-import type { InsertMemory } from "@/types";
 import { beforeEach, describe, expect, test } from "@/test";
-import type { Agent } from "@/types";
+import type { Agent, InsertMemory } from "@/types";
 import { type ArchestraContext, executeArchestraTool } from ".";
 
 const t = (name: string) =>
@@ -24,7 +23,10 @@ function memoriesFrom(result: { structuredContent?: unknown }): any[] {
 }
 
 async function seedMemory(values: InsertMemory) {
-  const [row] = await db.insert(schema.memoriesTable).values(values).returning();
+  const [row] = await db
+    .insert(schema.memoriesTable)
+    .values(values)
+    .returning();
   return row;
 }
 
@@ -35,25 +37,23 @@ describe("memory tool execution", () => {
   let otherUserId: string;
   let context: ArchestraContext;
 
-  beforeEach(
-    async ({ makeAgent, makeUser, makeMember, makeOrganization }) => {
-      const org = await makeOrganization();
-      organizationId = org.id;
-      const user = await makeUser();
-      const otherUser = await makeUser();
-      await makeMember(user.id, organizationId, { role: "admin" });
-      await makeMember(otherUser.id, organizationId, { role: "member" });
-      userId = user.id;
-      otherUserId = otherUser.id;
-      agent = await makeAgent({ organizationId, name: "Memory Agent" });
-      context = {
-        agent: { id: agent.id, name: agent.name },
-        organizationId,
-        userId,
-        contextIsTrusted: true,
-      };
-    },
-  );
+  beforeEach(async ({ makeAgent, makeUser, makeMember, makeOrganization }) => {
+    const org = await makeOrganization();
+    organizationId = org.id;
+    const user = await makeUser();
+    const otherUser = await makeUser();
+    await makeMember(user.id, organizationId, { role: "admin" });
+    await makeMember(otherUser.id, organizationId, { role: "member" });
+    userId = user.id;
+    otherUserId = otherUser.id;
+    agent = await makeAgent({ organizationId, name: "Memory Agent" });
+    context = {
+      agent: { id: agent.id, name: agent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
+  });
 
   test("view and search never return another user's personal memory", async () => {
     await seedMemory({
@@ -136,7 +136,10 @@ describe("memory tool execution", () => {
     expect(memoriesFrom(outsiderResult)).toEqual([]);
   });
 
-  test("org memory is visible to any org user", async ({ makeUser, makeMember }) => {
+  test("org memory is visible to any org user", async ({
+    makeUser,
+    makeMember,
+  }) => {
     const orgUser = await makeUser();
     await makeMember(orgUser.id, organizationId, { role: "member" });
 

@@ -40,9 +40,7 @@ export function useSettingsTabs() {
     ...(permissionMap?.["/settings/knowledge"]
       ? [{ label: "Knowledge", href: "/settings/knowledge" }]
       : []),
-    ...(showMemoryTab
-      ? [{ label: "Memory", href: "/settings/memory" }]
-      : []),
+    ...(showMemoryTab ? [{ label: "Memory", href: "/settings/memory" }] : []),
     ...(permissionMap?.["/settings/environments"]
       ? [{ label: "Environments", href: "/settings/environments" }]
       : []),

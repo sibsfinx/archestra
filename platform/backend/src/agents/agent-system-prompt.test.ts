@@ -16,8 +16,8 @@ import {
   TOOL_LOAD_SKILL_SHORT_NAME,
 } from "@archestra/shared";
 import type { Tool } from "ai";
-import db, { schema } from "@/database";
 import { archestraMcpBranding } from "@/archestra-mcp-server";
+import db, { schema } from "@/database";
 import logger from "@/logging";
 import { MemoryModel, SkillModel } from "@/models";
 import { SKILL_SANDBOX_ATTACHMENTS_DIR } from "@/skills-sandbox/runtime-image";

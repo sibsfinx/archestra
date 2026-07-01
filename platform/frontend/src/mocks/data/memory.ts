@@ -14,9 +14,7 @@ export type MockMemory = {
 
 export const memoriesSeed: MockMemory[] = [];
 
-export function makeMemory(
-  overrides: Partial<MockMemory> = {},
-): MockMemory {
+export function makeMemory(overrides: Partial<MockMemory> = {}): MockMemory {
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),
