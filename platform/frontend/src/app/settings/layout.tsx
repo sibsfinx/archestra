@@ -55,6 +55,11 @@ const PAGE_CONFIG: Record<string, { title: string; description: string }> = {
     description:
       "Manage organization-wide appearance and authentication settings",
   },
+  "/settings/mail": {
+    title: "Mail",
+    description:
+      "Configure outbound SMTP for password reset and invitation emails.",
+  },
   "/settings/roles": {
     title: "Roles",
     description:

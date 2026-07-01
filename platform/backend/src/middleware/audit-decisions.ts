@@ -564,6 +564,10 @@ export const AUDIT_DECISIONS = {
     audited: false,
     reason: "ephemeral in-app notifications; per-user UI state",
   },
+  mailSettingsTable: {
+    audited: false,
+    reason: "org mail configuration; SMTP secrets are encrypted at rest",
+  },
 } satisfies Record<keyof typeof schema, AuditDecision>;
 
 /**

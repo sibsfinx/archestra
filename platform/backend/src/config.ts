@@ -15,6 +15,7 @@ import {
 import type { OTLPExporterNodeConfigBase } from "@opentelemetry/otlp-exporter-base";
 import dotenv from "dotenv";
 import logger from "@/logging";
+import type { MailProviderType } from "@/mail/types";
 import { SKILL_MARKETPLACE_PREFIX } from "@/routes/route-paths";
 import {
   type EmailProviderType,
@@ -244,6 +245,24 @@ const parseIncomingEmailProvider = (): EmailProviderType | undefined => {
     process.env.ARCHESTRA_AGENTS_INCOMING_EMAIL_PROVIDER?.toLowerCase();
   const result = EmailProviderTypeSchema.safeParse(provider);
   return result.success ? result.data : undefined;
+};
+
+/**
+ * Outbound transactional mail (password reset, etc.).
+ * @public — exported for testability
+ */
+export const parseOutboundMailProvider = (): MailProviderType => {
+  const provider = process.env.ARCHESTRA_MAIL_PROVIDER?.trim().toLowerCase();
+  if (provider === "smtp") return "smtp";
+  if (provider === "capture") return "capture";
+  if (provider === "log") return "log";
+  if (
+    !provider &&
+    (process.env.VITEST === "true" || process.env.NODE_ENV === "test")
+  ) {
+    return "capture";
+  }
+  return "log";
 };
 
 /**
@@ -1026,6 +1045,24 @@ const config = {
      */
     dynamicClientRegistrationEnabled:
       process.env.ARCHESTRA_AUTH_DCR_ENABLED !== "false",
+  },
+  mail: {
+    provider: parseOutboundMailProvider(),
+    from: process.env.ARCHESTRA_MAIL_FROM?.trim() || "",
+    smtp: {
+      host: process.env.ARCHESTRA_MAIL_SMTP_HOST?.trim() || "",
+      port: process.env.ARCHESTRA_MAIL_SMTP_PORT
+        ? Number.parseInt(process.env.ARCHESTRA_MAIL_SMTP_PORT, 10)
+        : 587,
+      tlsMode:
+        (process.env.ARCHESTRA_MAIL_SMTP_TLS_MODE?.trim() as
+          | "none"
+          | "starttls"
+          | "tls"
+          | undefined) || "starttls",
+      username: process.env.ARCHESTRA_MAIL_SMTP_USERNAME?.trim() || "",
+      password: process.env.ARCHESTRA_MAIL_SMTP_PASSWORD?.trim() || "",
+    },
   },
   analytics: getAnalyticsConfig(),
   database: {

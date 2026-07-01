@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { lintMigrationSql, summarizeIssues } from "../src";
 
@@ -105,6 +107,34 @@ describe("lintMigrationSql", () => {
       "add-validating-constraint",
     );
     expect(notValid.issues).toEqual([]);
+  });
+
+  test("allows NOT VALID org FK on new table (mail_settings / 0320 pattern)", () => {
+    const result = lintMigrationSql(`
+CREATE TABLE "mail_settings" (
+  "organization_id" text NOT NULL
+);
+ALTER TABLE "mail_settings" ADD CONSTRAINT "mail_settings_organization_id_organization_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organization"("id") ON DELETE cascade ON UPDATE no action NOT VALID;
+`);
+
+    expect(
+      result.issues.filter((issue) => issue.code === "add-validating-constraint"),
+    ).toEqual([]);
+  });
+
+  test("0320_create_mail_settings.sql has no validating-constraint errors", () => {
+    const sql = readFileSync(
+      join(
+        __dirname,
+        "../../backend/src/database/migrations/0320_create_mail_settings.sql",
+      ),
+      "utf-8",
+    );
+    const result = lintMigrationSql(sql);
+
+    expect(
+      result.issues.filter((issue) => issue.code === "add-validating-constraint"),
+    ).toEqual([]);
   });
 
   test("flags create index without concurrently as a warning", () => {

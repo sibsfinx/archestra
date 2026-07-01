@@ -50,6 +50,7 @@ import type { AuditEventName } from "@/types/audit-log";
 import { ssoConfig, syncSsoRole, syncSsoTeams } from "./idp.ee";
 import { linkedIdentityProviderPlugin } from "./linked-idp";
 import { hashOauthClientSecret } from "./oauth-client-secret";
+import { sendPasswordResetEmail } from "./password-reset-email";
 
 // SPDX-SnippetEnd
 
@@ -260,6 +261,19 @@ export const auth = betterAuth({
 
   emailAndPassword: {
     enabled: true,
+    revokeSessionsOnPasswordReset: true,
+    sendResetPassword: async ({ user, url }) => {
+      void sendPasswordResetEmail({
+        email: user.email,
+        url,
+        userId: user.id,
+      }).catch((err) => {
+        logger.error(
+          { err, userId: user.id, email: user.email },
+          "[auth] failed to send password reset email",
+        );
+      });
+    },
   },
 
   account: {

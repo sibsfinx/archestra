@@ -1,5 +1,5 @@
 import { E2eTestId } from "@archestra/shared";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useSearchParams } from "next/navigation";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -62,9 +62,9 @@ describe("AuthViewWithErrorHandling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSignInMutateAsync.mockResolvedValue({
+      success: true,
       redirectUrl: "/",
     });
-    window.sessionStorage.clear();
     window.history.replaceState({}, "", "/auth/sign-in");
     vi.mocked(useSearchParams).mockReturnValue(
       mockSearchParams as unknown as ReturnType<typeof useSearchParams>,
@@ -159,5 +159,32 @@ describe("AuthViewWithErrorHandling", () => {
     await waitFor(() => {
       expect(screen.getByText("Sign-In Failed")).toBeInTheDocument();
     });
+  });
+
+  it("shows a forgot-password link for invalid credentials", async () => {
+    mockSearchParams.get.mockReturnValue(null);
+    mockSignInMutateAsync.mockResolvedValue({
+      success: false,
+      showForgotPassword: true,
+    });
+
+    render(<AuthViewWithErrorHandling path="sign-in" callbackURL="/chat" />);
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "me@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "wrong-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("link", { name: "Forgot password?" }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("link", { name: "Forgot password?" }),
+    ).toHaveAttribute("href", "/auth/forgot-password");
   });
 });

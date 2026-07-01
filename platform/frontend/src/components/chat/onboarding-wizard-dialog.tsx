@@ -1,7 +1,8 @@
 "use client";
 
+import { E2eTestId } from "@archestra/shared";
 import { ChevronLeft, ChevronRight, Upload, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -11,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { OnboardingWizardMailSetup } from "./onboarding-wizard-mail-setup";
 
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
@@ -53,6 +55,7 @@ interface RuntimeProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   wizard: OnboardingWizardDialogWizard;
+  showMailSetup?: boolean;
 }
 
 interface EditProps {
@@ -69,6 +72,10 @@ interface EditProps {
 
 type OnboardingWizardDialogProps = RuntimeProps | EditProps;
 
+type RuntimeStep =
+  | { type: "mail" }
+  | { type: "page"; page: OnboardingWizardDialogPage };
+
 export function OnboardingWizardDialog(props: OnboardingWizardDialogProps) {
   if (props.mode === "runtime") {
     return <RuntimeDialog {...props} />;
@@ -80,9 +87,19 @@ function RuntimeDialog({
   open,
   onOpenChange,
   wizard,
+  showMailSetup = false,
 }: Omit<RuntimeProps, "mode">) {
   const [step, setStep] = useState(0);
-  const pageCount = wizard.pages.length;
+  const steps = useMemo<RuntimeStep[]>(() => {
+    const pageSteps = wizard.pages.map((page) => ({
+      type: "page" as const,
+      page,
+    }));
+    return showMailSetup
+      ? [{ type: "mail" as const }, ...pageSteps]
+      : pageSteps;
+  }, [showMailSetup, wizard.pages]);
+  const pageCount = steps.length;
 
   useEffect(() => {
     if (open) setStep(0);
@@ -91,9 +108,17 @@ function RuntimeDialog({
   if (pageCount === 0) return null;
 
   const safeStep = Math.min(step, pageCount - 1);
-  const page = wizard.pages[safeStep];
+  const currentStep = steps[safeStep];
   const isFirst = safeStep === 0;
   const isLast = safeStep === pageCount - 1;
+  const isMailStep = currentStep?.type === "mail";
+  const goNext = () => {
+    if (isLast) {
+      onOpenChange(false);
+      return;
+    }
+    setStep((s) => Math.min(pageCount - 1, s + 1));
+  };
 
   return (
     <StandardDialog
@@ -116,6 +141,16 @@ function RuntimeDialog({
               <ChevronLeft className="h-4 w-4 mr-1" />
               Back
             </Button>
+            {isMailStep && (
+              <Button
+                type="button"
+                variant="outline"
+                data-testid={E2eTestId.OnboardingSkipButton}
+                onClick={goNext}
+              >
+                Skip setup
+              </Button>
+            )}
             {isLast ? (
               <Button type="button" onClick={() => onOpenChange(false)}>
                 Done
@@ -123,7 +158,8 @@ function RuntimeDialog({
             ) : (
               <Button
                 type="button"
-                onClick={() => setStep((s) => Math.min(pageCount - 1, s + 1))}
+                data-testid={E2eTestId.OnboardingNextButton}
+                onClick={goNext}
               >
                 Next
                 <ChevronRight className="h-4 w-4 ml-1" />
@@ -133,7 +169,11 @@ function RuntimeDialog({
         </div>
       }
     >
-      <TwoColumnPage page={page} />
+      {currentStep?.type === "mail" ? (
+        <OnboardingWizardMailSetup />
+      ) : currentStep ? (
+        <TwoColumnPage page={currentStep.page} />
+      ) : null}
     </StandardDialog>
   );
 }

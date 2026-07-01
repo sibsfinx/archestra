@@ -11,9 +11,11 @@ import {
   XCircle,
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
+import { toast } from "sonner";
 import { z } from "zod";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -44,7 +46,9 @@ import {
   usePublicEnterpriseCoreActive,
 } from "@/lib/config/config.query";
 import { useAppName } from "@/lib/hooks/use-app-name";
+import { ForgotPasswordView } from "./forgot-password-view";
 import { RecoverAccountView } from "./recover-account-view";
+import { ResetPasswordView } from "./reset-password-view";
 import { SignOutWithIdpLogout } from "./sign-out-with-idp-logout";
 import { TwoFactorView } from "./two-factor-view";
 
@@ -144,6 +148,15 @@ const SignInFormSchema = z.object({
 
 type SignInFormValues = z.infer<typeof SignInFormSchema>;
 
+const ComponentState = {
+  SignIn: "sign-in",
+  InvalidCredentials: "invalid-credentials",
+} as const;
+
+const FORGOT_PASSWORD_PATH = "/auth/forgot-password" as const;
+
+type ComponentStateValue = (typeof ComponentState)[keyof typeof ComponentState];
+
 interface AuthViewWithErrorHandlingProps {
   path: string;
   callbackURL?: string;
@@ -174,6 +187,8 @@ export function AuthViewWithErrorHandling({
     ? identityProvidersData
     : [];
   const hasIdentityProviders = identityProviders.length > 0;
+  const pathRef = useRef(path);
+  pathRef.current = path;
 
   // Check for SSO error in query params
   useEffect(() => {
@@ -220,7 +235,15 @@ export function AuthViewWithErrorHandling({
         const url =
           typeof args[0] === "string" ? args[0] : (args[0] as Request)?.url;
 
-        const isAuthEndpoint = url?.includes("/api/auth/sign-in");
+        const isPasswordResetRequest = url?.includes(
+          "/api/auth/request-password-reset",
+        );
+        const isAuthEndpoint =
+          url?.includes("/api/auth/sign-in") ||
+          url?.includes("/api/auth/sign-up") ||
+          url?.includes("/api/auth/forgot-password") ||
+          url?.includes("/api/auth/reset-password") ||
+          isPasswordResetRequest;
 
         // Check for 403 "Invalid origin" errors
         if (isAuthEndpoint && response.status === 403) {
@@ -239,6 +262,18 @@ export function AuthViewWithErrorHandling({
           }
         }
 
+        if (
+          isPasswordResetRequest &&
+          !response.ok &&
+          pathRef.current === "forgot-password"
+        ) {
+          const message = await getAuthErrorMessageFromResponse(response);
+          toast.error(
+            message ??
+              "Password reset is unavailable. Check backend logs or contact your administrator.",
+          );
+        }
+
         // Check if this is a sign-in/sign-up request and if it's a server error
         // Only show error for actual auth attempts, not status checks
         if (isAuthEndpoint && response.status >= 500) {
@@ -254,7 +289,13 @@ export function AuthViewWithErrorHandling({
         // Network errors or other fetch failures for auth endpoints
         const url =
           typeof args[0] === "string" ? args[0] : (args[0] as Request)?.url;
-        if (url?.includes("/api/auth/sign-in")) {
+        if (
+          url?.includes("/api/auth/sign-in") ||
+          url?.includes("/api/auth/sign-up") ||
+          url?.includes("/api/auth/forgot-password") ||
+          url?.includes("/api/auth/reset-password") ||
+          url?.includes("/api/auth/request-password-reset")
+        ) {
           console.error("Network error from auth endpoint:", url, error);
           setServerError(true);
         }
@@ -277,6 +318,14 @@ export function AuthViewWithErrorHandling({
 
   if (path === "recover-account") {
     return <RecoverAccountView />;
+  }
+
+  if (path === "forgot-password") {
+    return <ForgotPasswordView />;
+  }
+
+  if (path === "reset-password") {
+    return <ResetPasswordView />;
   }
 
   // Only sign-in remains: sign-up is handled upstream (blocked without an
@@ -475,6 +524,9 @@ export function AuthViewWithErrorHandling({
 }
 
 function SignInView({ callbackURL }: { callbackURL?: string }) {
+  const [componentState, setComponentState] = useState<ComponentStateValue>(
+    ComponentState.SignIn,
+  );
   const signIn = useSignInWithEmailMutation();
   const signInForm = useForm<SignInFormValues>({
     resolver: zodResolver(SignInFormSchema),
@@ -485,18 +537,22 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
   });
 
   async function onSignIn(values: SignInFormValues) {
+    setComponentState(ComponentState.SignIn);
+
     const result = await signIn.mutateAsync({
       email: values.email,
       password: values.password,
       callbackURL,
     });
 
-    if (!result) return;
+    if (!result.success) {
+      if (result.showForgotPassword) {
+        setComponentState(ComponentState.InvalidCredentials);
+      }
+      return;
+    }
 
     if (result.twoFactorRedirect) {
-      // Forward only the computed callback target (not the raw query string,
-      // which could carry an attacker-supplied totpURI) so the two-factor
-      // view can complete the original navigation after verification.
       redirectAfterSignIn(
         callbackURL
           ? `/auth/two-factor?redirectTo=${encodeURIComponent(callbackURL)}`
@@ -569,6 +625,16 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
               )}
               Sign In
             </Button>
+            {componentState === ComponentState.InvalidCredentials && (
+              <div className="text-center">
+                <Link
+                  href={FORGOT_PASSWORD_PATH}
+                  className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+            )}
           </form>
         </Form>
       </CardContent>
@@ -578,4 +644,22 @@ function SignInView({ callbackURL }: { callbackURL?: string }) {
 
 function redirectAfterSignIn(url: string) {
   window.location.href = url;
+}
+
+async function getAuthErrorMessageFromResponse(response: Response) {
+  try {
+    const body = (await response.clone().json()) as {
+      message?: string;
+      error?: { message?: string };
+    };
+    if (typeof body.message === "string") {
+      return body.message;
+    }
+    if (typeof body.error?.message === "string") {
+      return body.error.message;
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return null;
 }

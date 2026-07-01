@@ -4,6 +4,7 @@ export const E2eTestId = {
   CreateAgentCloseHowToConnectButton: "create-agent-how-to-connect-button",
   CloneAgentButton: "clone-agent-button",
   DeleteAgentButton: "delete-agent-button",
+  OnboardingWizardButton: "onboarding-wizard-button",
   OnboardingNextButton: "onboarding-next-button",
   OnboardingSkipButton: "onboarding-skip-button",
   SignInSubmitButton: "sign-in-submit-button",
@@ -72,6 +73,12 @@ export const E2eTestId = {
     "inline-vault-secret-selector-secret-trigger",
   InlineVaultSecretSelectorSecretTriggerKey:
     "inline-vault-secret-selector-secret-trigger-key",
+  MailSettingsProviderSmtp: "mail-settings-provider-smtp",
+  MailSettingsTestEmailButton: "mail-settings-test-email-button",
+  MailSettingsEnvOverrideAlert: "mail-settings-env-override-alert",
+  OnboardingMailStep: "onboarding-mail-step",
+  OnboardingMailSaveButton: "onboarding-mail-save-button",
+  SidebarMailWarningLink: "sidebar-mail-warning-link",
   McpServerSettingsConnectionsNavButton:
     "mcp-server-settings-connections-nav-button",
   McpServerSettingsConnectionsContent:

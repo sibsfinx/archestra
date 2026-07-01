@@ -19,6 +19,11 @@ import {
   virtualKeysSeed,
 } from "./data/llm-keys";
 import {
+  makeSmtpMailSettings,
+  unconfiguredMailSettingsSeed,
+  unconfiguredMailStatusSeed,
+} from "./data/mail-settings";
+import {
   appearanceSettingsSeed,
   organizationSeed,
   teamsSeed,
@@ -94,6 +99,9 @@ export const handlers: HttpHandler[] = [
   ...getJson("/api/organization", organizationSeed),
   ...getJson("/api/organization/appearance-settings", appearanceSettingsSeed),
   ...getJson("/api/organization/mcp-preset-entries", []),
+  ...postJson("/api/organization/complete-onboarding", organizationSeed),
+  ...getJson("/api/members/default-agent", { agentId: null }),
+  ...getJson("/api/members/default-model", { modelId: null, apiKeyId: null }),
   // Fetched by the catalog form's Environment selector (and the Environments
   // section). Empty list keeps the strict unhandled-request guard satisfied.
   ...getJson("/api/environments", {
@@ -294,4 +302,10 @@ export const handlers: HttpHandler[] = [
   ...getJson("/api/knowledge-bases", []),
   ...getJson("/api/connectors", []),
   ...getJson("/api/identity-providers", []),
+
+  // Outbound mail settings
+  ...getJson("/api/mail/settings", unconfiguredMailSettingsSeed),
+  ...getJson("/api/mail/status", unconfiguredMailStatusSeed),
+  ...putJson("/api/mail/settings", makeSmtpMailSettings()),
+  ...postJson("/api/mail/test", { success: true, durationMs: 12 }),
 ];

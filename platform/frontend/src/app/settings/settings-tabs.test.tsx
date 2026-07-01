@@ -302,6 +302,7 @@ describe("useSettingsTabs", () => {
         "Identity Providers",
         "Secrets",
         "Organization",
+        "Mail",
       ]);
     });
   });

@@ -8,6 +8,22 @@ type AuthClientError = {
   statusText?: string;
 };
 
+export type SignInResult =
+  | {
+      success: true;
+      twoFactorRedirect: true;
+      redirectUrl: null;
+    }
+  | {
+      success: true;
+      twoFactorRedirect?: false;
+      redirectUrl: string;
+    }
+  | {
+      success: false;
+      showForgotPassword: boolean;
+    };
+
 export function useUpdateAccountNameMutation() {
   const queryClient = useQueryClient();
 
@@ -73,22 +89,29 @@ export function useSignInWithEmailMutation() {
       });
 
       if (error) {
-        toast.error(getAuthErrorMessage(error, "Failed to sign in"));
-        return null;
+        const errorMessage = getAuthErrorMessage(error, "Failed to sign in");
+        toast.error(errorMessage);
+
+        return {
+          success: false,
+          showForgotPassword: isInvalidSignInCredentialsError(errorMessage),
+        } satisfies SignInResult;
       }
 
-      // Accounts with 2FA enabled get a pending session that must be
-      // completed on /auth/two-factor before any redirect.
       if (data && "twoFactorRedirect" in data && data.twoFactorRedirect) {
-        return { twoFactorRedirect: true as const, redirectUrl: null };
+        return {
+          success: true,
+          twoFactorRedirect: true,
+          redirectUrl: null,
+        } satisfies SignInResult;
       }
 
       await queryClient.invalidateQueries({ queryKey: authQueryKeys.all });
 
       return {
-        twoFactorRedirect: false as const,
+        success: true,
         redirectUrl: data?.url ?? params.callbackURL ?? "/",
-      };
+      } satisfies SignInResult;
     },
   });
 }
@@ -105,4 +128,10 @@ function getChangePasswordErrorMessage(
   return message === "Invalid password"
     ? "Current password is invalid"
     : message;
+}
+
+function isInvalidSignInCredentialsError(message: string) {
+  return (
+    message === "Invalid email or password" || message === "Invalid password"
+  );
 }

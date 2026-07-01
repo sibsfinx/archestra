@@ -4,7 +4,10 @@ import type { ReactNode } from "react";
 import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authClient } from "@/lib/clients/auth/auth-client";
-import { useChangeAccountPasswordMutation } from "./account.query";
+import {
+  useChangeAccountPasswordMutation,
+  useSignInWithEmailMutation,
+} from "./account.query";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -16,6 +19,9 @@ vi.mock("sonner", () => ({
 vi.mock("@/lib/clients/auth/auth-client", () => ({
   authClient: {
     changePassword: vi.fn(),
+    signIn: {
+      email: vi.fn(),
+    },
   },
 }));
 
@@ -44,6 +50,34 @@ describe("useChangeAccountPasswordMutation", () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith("Current password is invalid");
     });
+  });
+});
+
+describe("useSignInWithEmailMutation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns forgot-password metadata for invalid sign-in credentials", async () => {
+    vi.mocked(authClient.signIn.email).mockResolvedValue({
+      data: null,
+      error: { message: "Invalid email or password" },
+    } as Awaited<ReturnType<typeof authClient.signIn.email>>);
+
+    const { result } = renderHook(() => useSignInWithEmailMutation(), {
+      wrapper: createWrapper(),
+    });
+
+    await expect(
+      result.current.mutateAsync({
+        email: "me@example.com",
+        password: "wrong-password",
+      }),
+    ).resolves.toEqual({
+      success: false,
+      showForgotPassword: true,
+    });
+    expect(toast.error).toHaveBeenCalledWith("Invalid email or password");
   });
 });
 

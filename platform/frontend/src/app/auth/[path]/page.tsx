@@ -6,9 +6,8 @@ import { LoadingSpinner } from "@/components/loading";
 export const dynamicParams = false;
 
 /**
- * Auth views served by this dynamic route. Flows without backend support
- * (forgot/reset password, magic link, email OTP) intentionally have no route
- * and 404. Sign-up with an invitation lives at /auth/sign-up-with-invitation.
+ * Auth views served by this dynamic route. Sign-up with an invitation lives at
+ * /auth/sign-up-with-invitation.
  */
 const AUTH_VIEW_PATHS = [
   "sign-in",
@@ -16,6 +15,8 @@ const AUTH_VIEW_PATHS = [
   "sign-up",
   "two-factor",
   "recover-account",
+  "forgot-password",
+  "reset-password",
 ] as const;
 
 export function generateStaticParams() {

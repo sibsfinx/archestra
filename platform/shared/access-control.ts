@@ -1419,6 +1419,11 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.GetConfig]: {},
 
   // Site Notification Routes
+  [RouteId.GetMailSettings]: { organizationSettings: ["read"] },
+  [RouteId.UpdateMailSettings]: { organizationSettings: ["update"] },
+  [RouteId.GetMailStatus]: { organizationSettings: ["read"] },
+  [RouteId.TestMailSettings]: { organizationSettings: ["update"] },
+
   [RouteId.GetSiteNotification]: { siteNotification: ["read"] },
   [RouteId.GetSiteNotificationSettings]: { siteNotification: ["read"] },
   [RouteId.CreateSiteNotification]: { siteNotification: ["create"] },
@@ -1524,4 +1529,5 @@ export const requiredPagePermissionsMap: Record<string, Permissions> = {
   "/settings/secrets": { secret: ["read"] },
   "/settings/github": { githubAppConfig: ["read"] },
   "/settings/organization": { organizationSettings: ["read"] },
+  "/settings/mail": { organizationSettings: ["read"] },
 };

@@ -3,7 +3,9 @@ import { MswControl } from "./helpers/msw-control";
 import { AgentsPage } from "./pages/agents-page";
 import { LlmLogsPage } from "./pages/llm-logs-page";
 import { LlmProviderApiKeysPage } from "./pages/llm-provider-api-keys-page";
+import { MailSettingsPage } from "./pages/mail-settings-page";
 import { McpRegistryPage } from "./pages/mcp-registry-page";
+import { OnboardingMailPage } from "./pages/onboarding-mail-page";
 import { SkillsNewPage } from "./pages/skills-new-page";
 import { VirtualKeysPage } from "./pages/virtual-keys-page";
 
@@ -16,11 +18,15 @@ void LlmLogsPage;
 void LlmProviderApiKeysPage;
 void SkillsNewPage;
 void VirtualKeysPage;
+void MailSettingsPage;
+void OnboardingMailPage;
 
 type Fixtures = {
   agentsPage: AgentsPage;
   llmKeysPage: LlmProviderApiKeysPage;
   llmLogsPage: LlmLogsPage;
+  mailSettingsPage: MailSettingsPage;
+  onboardingMailPage: OnboardingMailPage;
   mcpRegistryPage: McpRegistryPage;
   mswControl: MswControl;
   skillsNewPage: SkillsNewPage;
@@ -47,6 +53,12 @@ export const test = base.extend<Fixtures & AutoFixtures>({
   llmLogsPage: async ({ page }, use) => {
     await use(new LlmLogsPage(page));
   },
+  mailSettingsPage: async ({ page }, use) => {
+    await use(new MailSettingsPage(page));
+  },
+  onboardingMailPage: async ({ page }, use) => {
+    await use(new OnboardingMailPage(page));
+  },
   mcpRegistryPage: async ({ page }, use) => {
     await use(new McpRegistryPage(page));
   },
@@ -66,7 +78,7 @@ export const test = base.extend<Fixtures & AutoFixtures>({
     // Reset after each test so overrides and unhandled-request lists don't
     // leak across tests when the Next.js dev server is reused
     // (`reuseExistingServer: true`).
-    await control.reset();
+    await control.reset({ tolerateTimeout: true });
   },
   _backendLeakGuard: [
     async ({ page, mswControl }, use) => {

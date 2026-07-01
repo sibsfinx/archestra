@@ -1,9 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSignInWithEmailMutation } from "@/lib/auth/account.query";
 import { authClient } from "@/lib/clients/auth/auth-client";
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}));
 
 vi.mock("@/lib/clients/auth/auth-client", () => ({
   authClient: {
@@ -47,7 +54,7 @@ describe("useSignInWithEmailMutation", () => {
     });
 
     expect(outcome).toEqual({
-      twoFactorRedirect: false,
+      success: true,
       redirectUrl: "/chat",
     });
   });
@@ -67,10 +74,14 @@ describe("useSignInWithEmailMutation", () => {
       password: "hunter22",
     });
 
-    expect(outcome).toEqual({ twoFactorRedirect: true, redirectUrl: null });
+    expect(outcome).toEqual({
+      success: true,
+      twoFactorRedirect: true,
+      redirectUrl: null,
+    });
   });
 
-  it("returns null and does not redirect on error", async () => {
+  it("returns forgot-password metadata on invalid credentials", async () => {
     vi.mocked(authClient.signIn.email).mockResolvedValue({
       data: null,
       error: { message: "Invalid email or password" },
@@ -85,8 +96,9 @@ describe("useSignInWithEmailMutation", () => {
       password: "wrong",
     });
 
-    await waitFor(() => {
-      expect(outcome).toBeNull();
+    expect(outcome).toEqual({
+      success: false,
+      showForgotPassword: true,
     });
   });
 });

@@ -141,6 +141,19 @@ describe("WithAuthCheck", () => {
       expect(screen.getByTestId("protected-content")).toBeInTheDocument();
     });
 
+    it("should allow access to forgot-password page", () => {
+      vi.mocked(usePathname).mockReturnValue("/auth/forgot-password");
+
+      render(
+        <WithAuthCheck>
+          <MockChild />
+        </WithAuthCheck>,
+      );
+
+      expect(mockRouterPush).not.toHaveBeenCalled();
+      expect(screen.getByTestId("protected-content")).toBeInTheDocument();
+    });
+
     it("should allow access to sign-out page without adding redirectTo", () => {
       vi.mocked(usePathname).mockReturnValue("/auth/sign-out");
 
