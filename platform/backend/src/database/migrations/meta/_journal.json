@@ -2245,8 +2245,22 @@
     {
       "idx": 320,
       "version": "7",
+      "when": 1782851902992,
+      "tag": "0320_flip-default-org-theme-to-caffeine",
+      "breakpoints": true
+    },
+    {
+      "idx": 321,
+      "version": "7",
+      "when": 1782904774033,
+      "tag": "0321_backfill-claude-client-external-agent-id",
+      "breakpoints": true
+    },
+    {
+      "idx": 322,
+      "version": "7",
       "when": 1782901171010,
-      "tag": "0320_nosy_namora",
+      "tag": "0322_nosy_namora",
       "breakpoints": true
     }
   ]
