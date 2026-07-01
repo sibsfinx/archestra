@@ -10,26 +10,43 @@ use tokio::fs;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::time::{Duration, sleep};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::client::{ClientError, EvalClient};
 
-/// A self-contained teardown for one backend instance: the process-group child and the database
-/// handle, decoupled from the `Instance` so cleanup can run even after the orchestration future is
-/// dropped on signal cancellation. Cloning shares the same `Arc` state as the live `Instance`, and
-/// running it twice is a no-op (the child is taken; the db_created flag is cleared).
+/// A self-contained teardown handle, decoupled from its owner so cleanup can run even after the
+/// orchestration future is dropped on signal cancellation. Cloning shares the same `Arc` state as the
+/// live owner, and running it twice is a no-op (the child is taken). Two kinds ride the same registry
+/// so `shutdown_all` kills them all on SIGINT/SIGTERM:
+/// - `Backend`: one backend instance — its process-group child plus the per-run database.
+/// - `DaggerLogs`: the process-wide managed-engine log follower (no database).
 #[derive(Clone)]
-struct Teardown {
-    proc: Arc<Mutex<Option<Child>>>,
-    db_created: Arc<Mutex<bool>>,
-    db_name: String,
-    maint_db_url: String,
+enum Teardown {
+    Backend {
+        proc: Arc<Mutex<Option<Child>>>,
+        db_created: Arc<Mutex<bool>>,
+        db_name: String,
+        maint_db_url: String,
+    },
+    DaggerLogs {
+        proc: Arc<Mutex<Option<Child>>>,
+    },
 }
 
 impl Teardown {
     async fn run(&self) {
-        kill_backend(&self.proc).await;
-        drop_database(&self.db_created, &self.db_name, &self.maint_db_url).await;
+        match self {
+            Teardown::Backend {
+                proc,
+                db_created,
+                db_name,
+                maint_db_url,
+            } => {
+                kill_backend(proc).await;
+                drop_database(db_created, db_name, maint_db_url).await;
+            }
+            Teardown::DaggerLogs { proc } => kill_child(proc, "managed Dagger engine log follower").await,
+        }
     }
 }
 
@@ -72,11 +89,18 @@ pub async fn shutdown_all() {
 }
 
 async fn kill_backend(proc: &Arc<Mutex<Option<Child>>>) {
+    kill_child(proc, "backend").await;
+}
+
+/// SIGTERM the child's process group, then SIGKILL if it doesn't exit in 15s. Takes the child so a
+/// second teardown is a no-op. Shared by the backend and the managed-engine log follower — both are
+/// spawned in their own process group (`process_group(0)`).
+async fn kill_child(proc: &Arc<Mutex<Option<Child>>>, what: &str) {
     let mut guard = proc.lock().await;
     if let Some(mut child) = guard.take()
         && let Some(pid) = child.id()
     {
-        info!("stopping backend pid {pid}");
+        info!("stopping {what} pid {pid}");
         let pgid = Pid::from_raw(pid as i32);
         let _ = signal::killpg(pgid, Signal::SIGTERM);
         match tokio::time::timeout(Duration::from_secs(15), child.wait()).await {
@@ -214,7 +238,7 @@ impl Instance {
         log_path: PathBuf,
     ) -> Self {
         let run_id = run_id.into();
-        let platform = platform_dir.unwrap_or_else(|| repo_root.join("platform"));
+        let platform = resolve_platform_dir(platform_dir.as_deref(), &repo_root);
         let bench_dev = repo_root.join("archestra-bench").join("dev");
         let bench_compose = bench_dev.join("docker-compose.bench-pg.yml");
         let dagger_compose = bench_dev.join("docker-compose.bench-dagger.yml");
@@ -242,14 +266,7 @@ impl Instance {
     }
 
     pub async fn start(&mut self) -> Result<(), LifecycleError> {
-        let env_path = self.platform.join(".env");
-        if !env_path.is_file() {
-            return Err(LifecycleError::Config(format!(
-                "{} not found; create it from platform/.env.example or start the dev stack",
-                env_path.display()
-            )));
-        }
-        self.env = parse_env_file(&env_path)?;
+        self.env = load_platform_env(&self.platform)?;
         let (bench_db_url, managed) = resolve_bench_db_url(&self.env);
         self.db_managed = managed;
         info!(
@@ -277,7 +294,7 @@ impl Instance {
 
         // Register teardown BEFORE the first side effect (database creation): an interruption during a
         // partial boot must still kill the process group and drop the database.
-        self.teardown_id = Some(register(Teardown {
+        self.teardown_id = Some(register(Teardown::Backend {
             proc: self.proc.clone(),
             db_created: self.db_created.clone(),
             db_name: self.db_name.clone(),
@@ -520,6 +537,28 @@ fn expand_env_refs(value: &str, lookup: &HashMap<String, String>) -> String {
     .to_string()
 }
 
+/// Resolve the platform directory: an explicit `--platform-dir` (the prod image lays the app out at
+/// `/app`) wins, otherwise `<repo_root>/platform` for the dev tree.
+pub fn resolve_platform_dir(platform_dir: Option<&Path>, repo_root: &Path) -> PathBuf {
+    platform_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| repo_root.join("platform"))
+}
+
+/// Load `<platform>/.env` into a map, requiring the file to exist. Centralizes the
+/// "missing `.env` is a config error, then parse" step shared by `start`, `preflight`, and the
+/// runner's lane-key resolution so the operator-facing message stays in one place.
+pub fn load_platform_env(platform: &Path) -> Result<HashMap<String, String>, LifecycleError> {
+    let env_path = platform.join(".env");
+    if !env_path.is_file() {
+        return Err(LifecycleError::Config(format!(
+            "{} not found; create it from platform/.env.example or start the dev stack",
+            env_path.display()
+        )));
+    }
+    parse_env_file(&env_path)
+}
+
 pub fn parse_env_file(path: &Path) -> Result<HashMap<String, String>, LifecycleError> {
     let text = std::fs::read_to_string(path)?;
     let mut env: HashMap<String, String> = HashMap::new();
@@ -629,17 +668,8 @@ pub async fn preflight(
     repo_root: &Path,
     platform_dir: Option<&Path>,
 ) -> Result<(), LifecycleError> {
-    let platform = platform_dir
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| repo_root.join("platform"));
-    let env_path = platform.join(".env");
-    if !env_path.is_file() {
-        return Err(LifecycleError::Config(format!(
-            "{} not found; create it from platform/.env.example or start the dev stack",
-            env_path.display()
-        )));
-    }
-    let (_bench_db_url, managed) = resolve_bench_db_url(&parse_env_file(&env_path)?);
+    let platform = resolve_platform_dir(platform_dir, repo_root);
+    let (_bench_db_url, managed) = resolve_bench_db_url(&load_platform_env(&platform)?);
     let bench_dev = repo_root.join("archestra-bench").join("dev");
     if managed {
         ensure_bench_postgres(&bench_dev.join("docker-compose.bench-pg.yml")).await?;
@@ -767,6 +797,83 @@ async fn ensure_bench_dagger(compose_file: &Path) -> Result<(), LifecycleError> 
         })
         .await
         .copied()
+}
+
+/// The managed engine's container logs, streamed to `<root_run_dir>/dagger.engine.log` so an engine
+/// crash mid-run is root-causeable (OOM vs panic) and correlatable with the backend log's timestamps.
+const DAGGER_ENGINE_LOG_FILE: &str = "dagger.engine.log";
+
+/// A running managed-engine log follower. Stopped explicitly at run end via [`Self::stop`]; also
+/// registered in the teardown registry so SIGINT/SIGTERM reaps it. Stopping deregisters first, so the
+/// signal path and the normal path never double-kill.
+pub struct DaggerLogsGuard {
+    teardown_id: u64,
+    proc: Arc<Mutex<Option<Child>>>,
+}
+
+impl DaggerLogsGuard {
+    /// Kill the follower and drop it from the teardown registry. Idempotent — a later `shutdown_all`
+    /// finds the child already taken and the id already gone.
+    pub async fn stop(self) {
+        kill_child(&self.proc, "managed Dagger engine log follower").await;
+        deregister(self.teardown_id);
+    }
+}
+
+/// Stream the managed Dagger engine's logs into the run dir for the duration of the run, returning a
+/// guard the caller stops at run end (`None` when capture was skipped or could not start).
+///
+/// MANAGED TIER ONLY: the engine is a local `docker compose` container we can `logs -f`. For the k8s
+/// port-forward tier and explicit `kube-pod://`/env-override hosts there is no local container to
+/// follow — log a one-line note and skip. Resolution must already have run (`resolve_runner_host`),
+/// so this reads the cached host rather than re-deciding.
+///
+/// NON-FATAL: this is pure diagnostics. If `docker`/compose is missing or the follower fails to
+/// spawn, warn and continue — never fail or block a run on log capture. The follower also joins the
+/// teardown registry, so SIGINT/SIGTERM reaps it even before [`DaggerLogsGuard::stop`] runs.
+pub async fn capture_managed_dagger_logs(
+    dagger_compose: &Path,
+    root_run_dir: &Path,
+) -> Option<DaggerLogsGuard> {
+    if RESOLVED_RUNNER_HOST.get().map(String::as_str) != Some(MANAGED_DAGGER_HOST) {
+        info!("sandbox: engine-log capture is managed-tier only; skipped for the resolved host");
+        return None;
+    }
+    match spawn_dagger_log_follower(dagger_compose, root_run_dir).await {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            warn!("could not capture managed Dagger engine logs (continuing): {e}");
+            None
+        }
+    }
+}
+
+/// Spawn the detached `docker compose ... logs -f --no-color --timestamps` follower, teeing both
+/// stdout and stderr into `dagger.engine.log` (mirrors the backend log tee). Streaming (not a
+/// teardown snapshot) so lines survive an engine container crash/recreate mid-run. `--timestamps`
+/// aligns engine lines with the backend log.
+async fn spawn_dagger_log_follower(
+    dagger_compose: &Path,
+    root_run_dir: &Path,
+) -> Result<DaggerLogsGuard, std::io::Error> {
+    let log_path = root_run_dir.join(DAGGER_ENGINE_LOG_FILE);
+    let log_file = std::fs::File::create(&log_path)?;
+    info!(
+        "capturing managed Dagger engine logs ({})",
+        log_path.display()
+    );
+    let mut cmd = Command::new("docker");
+    cmd.args(["compose", "-p", BENCH_DAGGER_COMPOSE_PROJECT, "-f"])
+        .arg(dagger_compose)
+        .args(["logs", "-f", "--no-color", "--timestamps"])
+        .stdout(log_file.try_clone()?)
+        .stderr(log_file)
+        .stdin(std::process::Stdio::null())
+        .process_group(0);
+    let child = cmd.spawn()?;
+    let proc = Arc::new(Mutex::new(Some(child)));
+    let teardown_id = register(Teardown::DaggerLogs { proc: proc.clone() });
+    Ok(DaggerLogsGuard { teardown_id, proc })
 }
 
 /// Names what the resolution ladder tried and how to fix it, in the style of
@@ -917,6 +1024,18 @@ pub fn build_backend_env(
     // Per-lane projects isolate file ownership so lanes sharing one backend don't collide on common
     // artifact names; the feature must be on for `POST /api/projects` and project-scoped conversations.
     env.insert("ARCHESTRA_PROJECTS_ENABLED".to_string(), "true".to_string());
+    // MCP Apps and agent environments ship dark behind these flags; the bench turns them on for every
+    // env (like the sandbox/projects flags above) so a run never depends on the operator's `.env` or
+    // `ARCHESTRA_BETA`. With Apps on, the platform assigns the app authoring tools to every agent at
+    // creation time (AgentModel.create -> assignAppToolsToAgent), independent of the bench's
+    // auto-assignment toggle, so non-apps agents carry them too. That mirrors the real product -- a
+    // user with Apps enabled has those tools -- and under the default search_and_run_only exposure
+    // they sit behind search_tools rather than in the upfront context, acting as realistic distractors.
+    env.insert("ARCHESTRA_APPS_ENABLED".to_string(), "true".to_string());
+    env.insert(
+        "ARCHESTRA_AGENTS_ENVIRONMENTS_ENABLED".to_string(),
+        "true".to_string(),
+    );
     env
 }
 
@@ -996,7 +1115,7 @@ mod tests {
         let pid = child.id().expect("child pid") as i32;
 
         let proc = Arc::new(Mutex::new(Some(child)));
-        let id = register(Teardown {
+        let id = register(Teardown::Backend {
             proc: proc.clone(),
             db_created: Arc::new(Mutex::new(false)),
             db_name: String::new(),
@@ -1037,7 +1156,7 @@ mod tests {
         let (proc_a, pid_a) = spawn_slow_term_child();
         let (proc_b, pid_b) = spawn_slow_term_child();
         for proc in [&proc_a, &proc_b] {
-            register(Teardown {
+            register(Teardown::Backend {
                 proc: proc.clone(),
                 db_created: Arc::new(Mutex::new(false)),
                 db_name: String::new(),
@@ -1101,6 +1220,26 @@ mod tests {
         assert_eq!(
             env.get("ARCHESTRA_CODE_RUNTIME_DAGGER_CLI_BIN"),
             Some(&"/dev/dagger".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_backend_env_force_enables_apps_and_environments() {
+        // Apps + agent environments are force-on for every env so a run doesn't depend on the
+        // operator's `.env`/`ARCHESTRA_BETA`; the apps env's tools can't resolve without them.
+        let base = HashMap::new();
+        let env = build_backend_env(
+            &base,
+            "postgres://h/db",
+            "http://localhost:1",
+            2,
+            MANAGED_DAGGER_HOST,
+            "/dev/dagger",
+        );
+        assert_eq!(env.get("ARCHESTRA_APPS_ENABLED"), Some(&"true".to_string()));
+        assert_eq!(
+            env.get("ARCHESTRA_AGENTS_ENVIRONMENTS_ENABLED"),
+            Some(&"true".to_string())
         );
     }
 
@@ -1176,6 +1315,13 @@ mod tests {
         let env = parse_env_file(&path).unwrap();
         assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
         assert_eq!(env.get("REF"), Some(&"bar/qux".to_string()));
+    }
+
+    #[test]
+    fn test_load_platform_env_missing_is_config_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = load_platform_env(tmp.path()).unwrap_err();
+        assert!(matches!(err, LifecycleError::Config(_)), "got {err:?}");
     }
 
     #[tokio::test]

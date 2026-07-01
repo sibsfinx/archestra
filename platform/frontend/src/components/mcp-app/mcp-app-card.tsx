@@ -1,20 +1,15 @@
 import type { McpUiDisplayMode } from "@modelcontextprotocol/ext-apps";
 import type React from "react";
 import { useEffect, useState } from "react";
-import {
-  clampInlineHeight,
-  INITIAL_INLINE_HEIGHT,
-} from "@/components/mcp-app/app-height";
 import { cn } from "@/lib/utils";
 
 /**
  * Shared layout chrome for every MCP App surface (chat, right panel, Apps page).
  * Owns the card frame, the inline / fullscreen / fill geometry, body sizing, and
  * the optional frozen placeholder. The per-surface controls are passed in as the
- * `topBar` and `bottomBar` slots — see the building blocks in `mcp-app-chrome`
- * ({@link McpAppTopBar} / {@link McpAppRefreshButton} / {@link McpAppVersionBar}
- * and the discrete action buttons) — so the card itself stays free of action
- * wiring.
+ * `topBar` slot — see the building blocks in `mcp-app-chrome`
+ * ({@link McpAppTopBar} / {@link McpAppRefreshButton} and the discrete action
+ * buttons) — so the card itself stays free of action wiring.
  *
  * Between the bars sit an optional diagnostics badge and the app body — either
  * the live runtime (`children`) or, when `placeholder` is set, a frozen-height
@@ -29,13 +24,11 @@ export function McpAppCard({
   onToggleFullscreen,
   children,
   diagnostics,
-  size,
-  inlineCeiling,
   fillContainer = false,
+  capInlineHeight = false,
   placeholder,
   frozenHeight,
   topBar,
-  bottomBar,
 }: {
   displayMode: McpUiDisplayMode;
   onToggleFullscreen: () => void;
@@ -46,9 +39,14 @@ export function McpAppCard({
    * badge stretched to full height would shove the app below the fold.
    */
   diagnostics?: React.ReactNode;
-  size: { width: number; height: number } | null;
-  inlineCeiling: number;
   fillContainer?: boolean;
+  /**
+   * Cap the (non-fullscreen, non-fill) inline body at 60% of the viewport
+   * (floored at 320px) so a tall app can't push the chat off-screen; content
+   * past the cap scrolls within the card. Only the chat-inline surface sets
+   * this — the standalone page and right panel stay full height.
+   */
+  capInlineHeight?: boolean;
   /**
    * When set, the body renders this node — frozen to `frozenHeight`, frosted —
    * instead of `children`. Used in chat while the live iframe lives in the panel.
@@ -56,7 +54,6 @@ export function McpAppCard({
   placeholder?: React.ReactNode;
   frozenHeight?: number;
   topBar?: React.ReactNode;
-  bottomBar?: React.ReactNode;
 }) {
   const isFullscreen = displayMode === "fullscreen";
   const [bounds, setBounds] = useState<{
@@ -125,20 +122,19 @@ export function McpAppCard({
           style={
             frozenHeight != null ? { height: `${frozenHeight}px` } : undefined
           }
-          className="flex items-center justify-center overflow-hidden bg-muted/30 text-xs backdrop-blur-sm"
+          className={cn(
+            "flex items-center justify-center overflow-hidden bg-muted/30 text-xs backdrop-blur-sm",
+            capInlineHeight && "max-h-[max(320px,60vh)]",
+          )}
         >
           {placeholder}
         </div>
       ) : (
         <div
           style={
-            fillContainer && !isFullscreen
-              ? undefined
-              : {
-                  maxHeight: isFullscreen
-                    ? `${bounds?.height || 1000}px`
-                    : `${clampInlineHeight(size?.height ?? INITIAL_INLINE_HEIGHT, inlineCeiling)}px`,
-                }
+            isFullscreen
+              ? { maxHeight: `${bounds?.height || 1000}px` }
+              : undefined
           }
           className={cn(
             "transition-[max-height] duration-400 ease-[cubic-bezier(0.23,1,0.32,1)]",
@@ -146,14 +142,14 @@ export function McpAppCard({
               ? "flex-1 overflow-hidden [&_iframe]:!w-full [&_iframe]:!h-full [&_iframe]:!min-h-0 [&_iframe]:!max-h-none [&>div]:!h-full"
               : fillContainer
                 ? "flex-1 min-h-0 overflow-hidden [&_iframe]:!w-full [&_iframe]:!h-full [&_iframe]:!min-h-0 [&_iframe]:!max-h-none [&>div]:!h-full"
-                : "[&_iframe]:!w-full overflow-y-hidden [&_div]:!max-h-none",
+                : capInlineHeight
+                  ? "[&_iframe]:!w-full max-h-[max(320px,60vh)] overflow-y-auto"
+                  : "[&_iframe]:!w-full",
           )}
         >
           {children}
         </div>
       )}
-
-      {bottomBar}
     </div>
   );
 }

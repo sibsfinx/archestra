@@ -64,6 +64,8 @@ export const RouteId = {
   DeleteInternalMcpCatalogItemByName: "deleteInternalMcpCatalogItemByName",
   GetInternalMcpCatalogLabelKeys: "getInternalMcpCatalogLabelKeys",
   GetInternalMcpCatalogLabelValues: "getInternalMcpCatalogLabelValues",
+  ListPendingImageApprovalCatalogItems: "listPendingImageApprovalCatalogItems",
+  ApproveCatalogItemImage: "approveCatalogItemImage",
   GetDeploymentYamlPreview: "getDeploymentYamlPreview",
   ValidateDeploymentYaml: "validateDeploymentYaml",
   ResetDeploymentYaml: "resetDeploymentYaml",
@@ -302,7 +304,9 @@ export const RouteId = {
   ForkChatConversation: "forkChatConversation",
   UpdateChatConversation: "updateChatConversation",
   SetConversationHooksDebug: "setConversationHooksDebug",
+  MarkChatConversationRead: "markChatConversationRead",
   DeleteChatConversation: "deleteChatConversation",
+  ClearChatConversationErrors: "clearChatConversationErrors",
   CompactChatConversation: "compactChatConversation",
   GenerateChatConversationTitle: "generateChatConversationTitle",
   GetChatMcpTools: "getChatMcpTools",
@@ -316,6 +320,7 @@ export const RouteId = {
   GetSharedConversation: "getSharedConversation",
   ForkSharedConversation: "forkSharedConversation",
   GetChatAttachmentContent: "getChatAttachmentContent",
+  DeleteChatAttachment: "deleteChatAttachment",
   GetLlmModels: "getLlmModels",
   SyncLlmModels: "syncLlmModels",
 
@@ -560,6 +565,7 @@ export const RouteId = {
   GetSkillSandboxArtifact: "getSkillSandboxArtifact",
   GetSkillSandboxConversationArtifacts: "getSkillSandboxConversationArtifacts",
   CreateProject: "createProject",
+  CreateProjectFromConversation: "createProjectFromConversation",
   GetProjects: "getProjects",
   GetProject: "getProject",
   UpdateProject: "updateProject",
@@ -567,11 +573,13 @@ export const RouteId = {
   DeleteProject: "deleteProject",
   GetProjectConversations: "getProjectConversations",
   GetProjectFiles: "getProjectFiles",
+  UploadProjectFiles: "uploadProjectFiles",
   GetProjectInstructions: "getProjectInstructions",
   SetProjectInstructions: "setProjectInstructions",
   PinProject: "pinProject",
   UnpinProject: "unpinProject",
   DeleteSkillSandboxArtifact: "deleteSkillSandboxArtifact",
+  UpdateSkillSandboxArtifactContent: "updateSkillSandboxArtifactContent",
 
   // Audit Log Routes
   GetAuditLogs: "getAuditLogs",
@@ -592,6 +600,7 @@ export const RouteId = {
   CreateConnectionSetup: "createConnectionSetup",
   GetConnectionSetupScript: "getConnectionSetupScript",
   CreateConnectionVirtualKey: "createConnectionVirtualKey",
+  CreateConnectionPassthroughKey: "createConnectionPassthroughKey",
 
   // MCP App Routes
   GetApps: "getApps",
@@ -606,6 +615,8 @@ export const RouteId = {
   AssignToolToApp: "assignToolToApp",
   UnassignToolFromApp: "unassignToolFromApp",
   GetAppTemplates: "getAppTemplates",
+  OpenAppInChat: "openAppInChat",
+  OpenExternalAppInChat: "openExternalAppInChat",
   PostAppRenderDiagnostics: "postAppRenderDiagnostics",
   PostAppRenderScreenshot: "postAppRenderScreenshot",
   // Frontend session-based proxy to the app-bound MCP server (chat + standalone)

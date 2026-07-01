@@ -65,10 +65,11 @@ export const ProjectListItemSchema = z.object({
   /** Share visibility; null = not shared (owner only). */
   visibility: ProjectShareVisibilitySchema.nullable(),
   /**
-   * Names of the teams a `team`-shared project is shared with, for the owner's
-   * visibility badge. Present (possibly empty) only when the caller owns a
-   * team-shared project; null otherwise (the share's targets are the owner's
-   * business, and other visibilities have no teams).
+   * Names of the teams a `team`-shared project is shared with, for the
+   * visibility badge. Present (possibly empty) when the caller owns the
+   * team-shared project or oversees it via `project:admin`; null otherwise — a
+   * plain "shared" recipient doesn't get the full target list (the owner's
+   * business), and non-team visibilities have no teams.
    */
   shareTeamNames: z.array(z.string()).nullable(),
   /** When the requesting user pinned this project; null = not pinned. */
@@ -98,6 +99,12 @@ export const ProjectConversationItemSchema = z.object({
   createdAt: z.date(),
   /** True when the caller is not the chat's author (view-only). */
   readOnly: z.boolean(),
+  /** The schedule (trigger) + run behind a `schedule_trigger` chat; null for
+   * user chats. Used to collapse a schedule's runs into one chat-list row. */
+  scheduleTriggerId: z.string().nullable(),
+  scheduleRunId: z.string().nullable(),
+  /** The schedule's name, shown as the row's subtitle for scheduled chats. */
+  scheduleName: z.string().nullable(),
 });
 export type ProjectConversationItem = z.infer<
   typeof ProjectConversationItemSchema

@@ -27,6 +27,7 @@ import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import config from "@/config";
 import db, { schema, withDbTransaction } from "@/database";
+import { enterpriseTier } from "@/enterprise-tier";
 import logger from "@/logging";
 import { LOG_LEVEL } from "@/logging/log-level";
 // Import directly from files to avoid circular dependency through barrel export
@@ -39,20 +40,17 @@ import SessionModel from "@/models/session";
 import UserModel from "@/models/user";
 import { reportAuditWriteFailure } from "@/observability/metrics/audit";
 import type { AuditEventName } from "@/types/audit-log";
-import { linkedIdentityProviderPlugin } from "./linked-idp";
-import { hashOauthClientSecret } from "./oauth-client-secret";
-
 // SPDX-SnippetBegin
 // SPDX-SnippetCopyrightText: 2026 Archestra Inc.
 // SPDX-License-Identifier: LicenseRef-Archestra-Enterprise
-const { ssoConfig, syncSsoRole, syncSsoTeams } = config.enterpriseFeatures.core
-  ? // biome-ignore lint/style/noRestrictedImports: EE-only SSO config
-    await import("./idp.ee")
-  : {
-      ssoConfig: undefined,
-      syncSsoRole: () => {},
-      syncSsoTeams: () => {},
-    };
+// SSO config is always loaded. The middleware in src/middleware.ts and the
+// runtime checks below gate access via enterpriseTier so the small-team free
+// tier can enable SSO without the license env var.
+// biome-ignore lint/style/noRestrictedImports: dual-licensed at request time
+import { ssoConfig, syncSsoRole, syncSsoTeams } from "./idp.ee";
+import { linkedIdentityProviderPlugin } from "./linked-idp";
+import { hashOauthClientSecret } from "./oauth-client-secret";
+
 // SPDX-SnippetEnd
 
 const APP_NAME = DEFAULT_APP_NAME;
@@ -285,6 +283,24 @@ export const auth = betterAuth({
        */
       allowDifferentEmails: false,
       allowUnlinkingAll: true,
+    },
+  },
+
+  session: {
+    // Cache the resolved session in a short-lived signed cookie so the common
+    // case — an authenticated API request — can validate the session without a
+    // database round-trip. The session table stays the source of truth; the
+    // cookie just front-runs the lookup for up to `maxAge` seconds.
+    //
+    // RBAC role/permission decisions are NOT affected: populateUserInfo still
+    // re-reads the user from the database on every request (request.user), so
+    // role changes apply immediately. Only session-level facts embedded in the
+    // cookie (e.g. a freshly banned user or a revoked session) can lag by up to
+    // `maxAge`. 60s is a deliberate trade of that small staleness window for
+    // removing a per-request session lookup.
+    cookieCache: {
+      enabled: true,
+      maxAge: 60,
     },
   },
 
@@ -578,7 +594,7 @@ async function getTrustedOriginsForAuthRequest(request?: Request) {
 }
 
 async function getTrustedAccountLinkingProviderIds(): Promise<string[]> {
-  if (!config.enterpriseFeatures.core) {
+  if (!enterpriseTier.isCoreActive()) {
     return [...IDENTITY_TRUSTED_PROVIDER_IDS];
   }
 
@@ -1535,7 +1551,7 @@ async function assertSsoEmailDomainAllowed(params: {
   userId: string;
   sessionId: string;
 }) {
-  if (!config.enterpriseFeatures.core) {
+  if (!enterpriseTier.isCoreActive()) {
     return;
   }
 

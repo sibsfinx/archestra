@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { useSession } from "@/lib/auth/auth.query";
 import { authClient } from "@/lib/clients/auth/auth-client";
 import { environmentKeys } from "./environment.query";
-import { handleApiError } from "./utils";
+import { handleApiError, throwOnApiError } from "./utils";
 
 export const appearanceKeys = {
   all: ["appearance"] as const,
@@ -21,20 +21,16 @@ export const appearanceKeys = {
  * Hook to fetch public appearance settings.
  * Used on login/auth pages where the user is not yet authenticated.
  * Returns theme, customFont, and logo without requiring authentication.
- * On API failure, returns null so React Query has a defined cache value while
- * callers keep using local fallback appearance values.
+ * On API failure the query enters its error state (no toast, since this is a
+ * pre-auth surface); callers keep using their local fallback appearance values.
  */
 export function useAppearanceSettings(enabled = true) {
   return useQuery({
     queryKey: appearanceKeys.public(),
     queryFn: async () => {
       const { data, error } = await archestraApiSdk.getAppearanceSettings();
-
-      if (error || !data) {
-        return null;
-      }
-
-      return data;
+      throwOnApiError(error, { toastOnError: false });
+      return data ?? null;
     },
     enabled,
     staleTime: 5 * 60 * 1000,
@@ -260,7 +256,8 @@ export function useOrganization(enabled = true) {
   return useQuery({
     queryKey: organizationKeys.details(),
     queryFn: async () => {
-      const { data } = await archestraApiSdk.getOrganization();
+      const { data, error } = await archestraApiSdk.getOrganization();
+      throwOnApiError(error, { toastOnError: false });
       return data;
     },
     // Only fetch when user is authenticated to prevent 403 errors during initial auth check
@@ -284,14 +281,7 @@ export function useOrganizationOnboardingStatus(enabled: boolean) {
     queryFn: async () => {
       const { data, error } = await archestraApiSdk.getOnboardingStatus();
 
-      if (error) {
-        handleApiError(error);
-        return {
-          hasProfilesConfigured: false,
-          hasToolsConfigured: false,
-          isComplete: false,
-        };
-      }
+      throwOnApiError(error);
 
       return (
         data ?? {
@@ -560,6 +550,8 @@ export function useDefaultEnvironment() {
     networkPolicy: organization?.defaultNetworkPolicy ?? null,
     restricted: organization?.defaultEnvironmentRestricted ?? false,
     validationRegex: organization?.defaultEnvironmentValidationRegex ?? null,
+    trustedImageRegistries:
+      organization?.defaultEnvironmentTrustedImageRegistries ?? null,
   };
 }
 
@@ -683,33 +675,6 @@ export function useTestEmbeddingConnection() {
 }
 
 /**
- * Complete onboarding
- */
-export function useCompleteOnboarding() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async () => {
-      const { data: updatedOrganization, error } =
-        await archestraApiSdk.completeOnboarding({
-          body: { onboardingComplete: true },
-        });
-
-      if (error) {
-        toast.error("Failed to complete onboarding");
-        return null;
-      }
-
-      return updatedOrganization;
-    },
-    onSuccess: (updatedOrganization) => {
-      if (!updatedOrganization) return;
-      queryClient.setQueryData(organizationKeys.details(), updatedOrganization);
-      toast.success("Onboarding complete");
-    },
-  });
-}
-
-/**
  * Get all members of the organization (for admin filtering)
  */
 export function useOrganizationMembers(enabled = true) {
@@ -717,10 +682,7 @@ export function useOrganizationMembers(enabled = true) {
     queryKey: [...organizationKeys.all, "members"],
     queryFn: async () => {
       const { data, error } = await archestraApiSdk.getOrganizationMembers();
-      if (error) {
-        handleApiError(error);
-        return [];
-      }
+      throwOnApiError(error);
       return data ?? [];
     },
     enabled,
@@ -745,9 +707,7 @@ export function useMemberSignupStatus() {
     queryKey: organizationKeys.memberSignupStatus(),
     queryFn: async () => {
       const { data, error } = await archestraApiSdk.getMemberSignupStatus();
-      if (error) {
-        return { pendingSignupMembers: [] as PendingSignupMember[] };
-      }
+      throwOnApiError(error, { toastOnError: false });
       return data ?? { pendingSignupMembers: [] as PendingSignupMember[] };
     },
   });

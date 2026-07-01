@@ -13,7 +13,6 @@ import {
   PinOff,
   Plus,
   Trash2,
-  Users,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -22,9 +21,13 @@ import { useForm } from "react-hook-form";
 import { ErrorBoundary } from "@/app/_parts/error-boundary";
 import { AgentIcon } from "@/components/agent-icon";
 import { AgentIconPicker } from "@/components/agent-icon-picker";
+import { ApiKeyLoadError } from "@/components/api-key-load-error";
 import { NoApiKeySetup } from "@/components/no-api-key-setup";
 import { PageLayout } from "@/components/page-layout";
 import { ProjectScopeFilter } from "@/components/project-scope-filter";
+import { EditProjectDialog } from "@/components/projects/edit-project-dialog";
+import { ProjectVisibilityBadge } from "@/components/projects/project-visibility-badge";
+import { QueryLoadError } from "@/components/query-load-error";
 import { SearchInput } from "@/components/search-input";
 import { StandardFormDialog } from "@/components/standard-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -50,7 +53,6 @@ import {
   useDeleteProject,
   usePinProject,
   useProjects,
-  useUpdateProject,
 } from "@/lib/projects/projects.query";
 import { ProjectDeleteConfirmDialog } from "./project-delete-confirm-dialog";
 
@@ -78,14 +80,25 @@ function ProjectsList() {
   const teamIds = csvParam("teamIds");
   const authorIds = csvParam("authorIds");
   const excludeAuthorIds = csvParam("excludeAuthorIds");
-  const { data, isPending } = useProjects({
+  const {
+    data,
+    isPending,
+    isLoadingError: isProjectsLoadError,
+    refetch: refetchProjects,
+  } = useProjects({
     scope: toApiProjectScope(scope),
     search,
     teamIds,
     authorIds,
     excludeAuthorIds,
+    toastOnError: false,
   });
-  const { hasAnyApiKey, isLoading: isApiKeyLoading } = useHasAnyApiKey();
+  const {
+    hasAnyApiKey,
+    isLoading: isApiKeyLoading,
+    isLoadError: isApiKeyLoadError,
+    refetch: refetchApiKeys,
+  } = useHasAnyApiKey();
   const [createOpen, setCreateOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<ProjectListItem | null>(
     null,
@@ -108,12 +121,37 @@ function ProjectsList() {
     !!authorIds ||
     !!excludeAuthorIds;
 
+  // The first keys fetch failed with no cached list (e.g. offline cold start).
+  // Show a retry state rather than the setup prompt, which would wrongly imply
+  // the user has no keys configured. `isLoadError` is scoped to the first-fetch
+  // failure, so a failed background refetch keeps the cached state instead.
+  if (!isApiKeyLoading && isApiKeyLoadError) {
+    return (
+      <PageLayout title="Projects" description={PROJECTS_DESCRIPTION}>
+        <ApiKeyLoadError onRetry={refetchApiKeys} />
+      </PageLayout>
+    );
+  }
+
   // Mirror the new-chat screen: with no usable LLM key there's nothing to run a
   // project on, so prompt to add one instead of offering project creation.
   if (!isApiKeyLoading && !hasAnyApiKey) {
     return (
       <PageLayout title="Projects" description={PROJECTS_DESCRIPTION}>
         <NoApiKeySetup description="Connect an LLM provider to start a project" />
+      </PageLayout>
+    );
+  }
+
+  // The projects list fetch failed with no cached data. Show a retry state so a
+  // failed fetch isn't misread as "No projects yet".
+  if (isProjectsLoadError) {
+    return (
+      <PageLayout title="Projects" description={PROJECTS_DESCRIPTION}>
+        <QueryLoadError
+          title="Couldn't load your projects"
+          onRetry={() => refetchProjects()}
+        />
       </PageLayout>
     );
   }
@@ -133,9 +171,9 @@ function ProjectsList() {
     >
       <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} />
       {editingProject && (
-        <EditProjectDetailsDialog
-          project={editingProject}
-          open={!!editingProject}
+        <EditProjectDialog
+          projectId={editingProject.id}
+          open
           onOpenChange={(open) => {
             if (!open) setEditingProject(null);
           }}
@@ -252,36 +290,34 @@ function ProjectCard({
 }) {
   const { data: isProjectAdmin } = useHasPermissions({ project: ["admin"] });
   return (
-    <div className="rounded-lg border p-4 transition-colors hover:bg-muted/50">
+    // `relative` + the title link's stretched `::after` (after:inset-0) makes the
+    // whole card a single click target for the project. Interactive children
+    // (the actions menu) sit above it via `relative z-10`.
+    <div className="relative rounded-lg border p-4 transition-colors hover:bg-muted/50">
       <div className="flex items-center justify-between gap-2">
         <Link
           href={`/projects/${project.id}`}
-          className="flex min-w-0 items-center gap-2"
+          className="flex min-w-0 items-center gap-2 after:absolute after:inset-0"
         >
           <span className="shrink-0">
             <AgentIcon icon={project.icon} fallbackType="project" size={18} />
           </span>
           <span className="min-w-0 truncate font-medium">{project.name}</span>
         </Link>
-        <span className="flex shrink-0 items-center gap-1">
-          {project.viewerRole === "admin" && (
+        <span className="relative z-10 flex shrink-0 items-center gap-1">
+          {/* Scope pill (personal/team/org) on every card. The owner label is
+              added only on another member's PERSONAL project (admin oversight),
+              where the personal pill alone can't say whose it is — for team/org
+              the scope pill already conveys the sharing. */}
+          <ProjectVisibilityBadge
+            visibility={project.visibility}
+            teamNames={project.shareTeamNames}
+          />
+          {project.viewerRole === "admin" && project.visibility === null && (
             <Badge variant="secondary">
               {project.ownerName
                 ? `Owned by ${project.ownerName}`
                 : "Other user"}
-            </Badge>
-          )}
-          {project.viewerRole === "shared" && (
-            <Badge variant="secondary">Shared with you</Badge>
-          )}
-          {project.viewerRole === "owner" && project.visibility && (
-            <Badge variant="outline" className="gap-1">
-              <Users className="h-3 w-3" />
-              {project.visibility === "organization"
-                ? "Org"
-                : project.shareTeamNames && project.shareTeamNames.length > 0
-                  ? project.shareTeamNames.join(", ")
-                  : "Teams"}
             </Badge>
           )}
           <ProjectCardActions
@@ -294,14 +330,11 @@ function ProjectCard({
           />
         </span>
       </div>
-      {project.description && (
-        <Link
-          href={`/projects/${project.id}`}
-          className="mt-1 block line-clamp-2 text-sm text-muted-foreground"
-        >
-          {project.description}
-        </Link>
-      )}
+      {/* Always reserve two lines so cards keep a uniform height regardless of
+          description length (or absence). */}
+      <p className="mt-1 line-clamp-2 h-10 text-sm text-muted-foreground">
+        {project.description}
+      </p>
     </div>
   );
 }
@@ -362,8 +395,6 @@ type CreateProjectForm = {
   icon: string | null;
 };
 
-type EditProjectDetailsForm = CreateProjectForm;
-
 function CreateProjectDialog({
   open,
   onOpenChange,
@@ -421,118 +452,6 @@ function CreateProjectDialog({
             }
           >
             Create
-          </Button>
-        </>
-      }
-    >
-      <div className="flex items-start gap-3">
-        <AgentIconPicker
-          value={icon}
-          onChange={(next) => form.setValue("icon", next)}
-          fallbackType="project"
-        />
-        <div className="flex-1 space-y-3 min-w-0">
-          <Input
-            autoFocus
-            placeholder="Project name"
-            maxLength={PROJECT_NAME_MAX_LENGTH}
-            aria-invalid={!!form.formState.errors.name}
-            {...form.register("name", {
-              required: "Project name is required.",
-              maxLength: {
-                value: PROJECT_NAME_MAX_LENGTH,
-                message: `Project name must be ${PROJECT_NAME_MAX_LENGTH} characters or fewer.`,
-              },
-            })}
-          />
-          {form.formState.errors.name?.message && (
-            <p className="text-xs text-destructive">
-              {form.formState.errors.name.message}
-            </p>
-          )}
-          <Textarea
-            placeholder="Description (optional)"
-            rows={3}
-            maxLength={PROJECT_DESCRIPTION_MAX_LENGTH}
-            aria-invalid={!!form.formState.errors.description}
-            {...form.register("description", {
-              maxLength: {
-                value: PROJECT_DESCRIPTION_MAX_LENGTH,
-                message: `Description must be ${PROJECT_DESCRIPTION_MAX_LENGTH} characters or fewer.`,
-              },
-            })}
-          />
-          {form.formState.errors.description?.message && (
-            <p className="text-xs text-destructive">
-              {form.formState.errors.description.message}
-            </p>
-          )}
-        </div>
-      </div>
-    </StandardFormDialog>
-  );
-}
-
-function EditProjectDetailsDialog({
-  project,
-  open,
-  onOpenChange,
-}: {
-  project: ProjectListItem;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const updateProject = useUpdateProject();
-  const form = useForm<EditProjectDetailsForm>({
-    defaultValues: {
-      name: project.name,
-      description: project.description ?? "",
-      icon: project.icon,
-    },
-    mode: "onChange",
-  });
-  const icon = form.watch("icon");
-  const name = form.watch("name");
-  const description = form.watch("description");
-  const hasLengthError =
-    name.length > PROJECT_NAME_MAX_LENGTH ||
-    description.length > PROJECT_DESCRIPTION_MAX_LENGTH;
-
-  const onSubmit = form.handleSubmit(async ({ name, description, icon }) => {
-    const ok = await updateProject.mutateAsync({
-      id: project.id,
-      name: name.trim(),
-      description: description.trim() || null,
-      icon,
-    });
-    if (ok) onOpenChange(false);
-  });
-
-  return (
-    <StandardFormDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Edit project"
-      description="Update this project's name, emoji, and description."
-      size="small"
-      onSubmit={onSubmit}
-      footer={
-        <>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={updateProject.isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            disabled={
-              updateProject.isPending || !name.trim().length || hasLengthError
-            }
-          >
-            Save
           </Button>
         </>
       }

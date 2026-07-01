@@ -34,7 +34,6 @@ vi.mock("@/lib/secrets.query", () => ({
   })),
 }));
 
-let mockEnterpriseFeatures = false;
 let mockMemoryGloballyEnabled = true;
 let mockMemoryOrgEnabled = true;
 
@@ -53,14 +52,6 @@ vi.mock("@/lib/organization.query", () => ({
   }),
 }));
 
-vi.mock("@/lib/config/config", () => ({
-  default: {
-    get enterpriseFeatures() {
-      return { core: mockEnterpriseFeatures };
-    },
-  },
-}));
-
 const createWrapper = () => {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -74,7 +65,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPermissions = {};
   mockSecretsType = "DB";
-  mockEnterpriseFeatures = false;
   mockMemoryGloballyEnabled = true;
   mockMemoryOrgEnabled = true;
 
@@ -310,8 +300,7 @@ describe("useSettingsTabs", () => {
     });
   });
 
-  it("shows Identity Providers tab only when enterprise features enabled and user has permission", async () => {
-    mockEnterpriseFeatures = true;
+  it("shows Identity Providers tab when user has identityProvider:read permission", async () => {
     mockPermissions = {
       identityProvider: ["read"],
     };
@@ -326,11 +315,8 @@ describe("useSettingsTabs", () => {
     });
   });
 
-  it("hides Identity Providers tab when enterprise features disabled", async () => {
-    mockEnterpriseFeatures = false;
-    mockPermissions = {
-      identityProvider: ["read"],
-    };
+  it("hides Identity Providers tab when user lacks identityProvider:read permission", async () => {
+    mockPermissions = {};
 
     const { result } = renderHook(() => useSettingsTabs(), {
       wrapper: createWrapper(),
@@ -369,7 +355,6 @@ describe("useSettingsTabs", () => {
   });
 
   it("maintains correct tab order", async () => {
-    mockEnterpriseFeatures = true;
     mockSecretsType = "Vault";
     mockPermissions = {
       member: ["read"],

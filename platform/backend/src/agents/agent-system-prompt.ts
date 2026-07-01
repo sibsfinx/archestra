@@ -13,6 +13,7 @@ import logger from "@/logging";
 import { MemoryModel, TeamModel, UserModel } from "@/models";
 import { buildSkillCatalogPrompt } from "@/skills/skill-catalog-prompt";
 import { isSkillSandboxAvailableForAgent } from "@/skills/skill-sandbox-availability";
+import { SKILL_SANDBOX_ATTACHMENTS_DIR } from "@/skills-sandbox/runtime-image";
 import {
   promptNeedsRendering,
   renderSystemPrompt,
@@ -199,7 +200,7 @@ function buildSandboxFallbackInstruction(): string {
   const runCommand = archestraMcpBranding.getToolName(
     TOOL_RUN_COMMAND_SHORT_NAME,
   );
-  return `You have a code execution environment: \`${runCommand}\` runs shell commands and Python in a persistent Linux workspace. When the available tools do not cover a task, you can fall back to it — for example to compute, transform files, or fetch data over the network.`;
+  return `You have a code execution environment: \`${runCommand}\` runs shell commands and Python in a persistent Linux workspace. When the available tools do not cover a task, you can fall back to it — for example to compute, transform files, or fetch data over the network. Files the user attaches to the conversation are staged for you under \`${SKILL_SANDBOX_ATTACHMENTS_DIR}/\`; read them from there. Write any files you produce to absolute paths in the workspace.`;
 }
 
 function buildLoadToolsWhenNeededSystemPrompt(): string {

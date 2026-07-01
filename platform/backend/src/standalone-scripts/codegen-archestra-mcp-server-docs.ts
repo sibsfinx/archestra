@@ -133,6 +133,7 @@ const toolGroups: Record<ArchestraToolShortName, ToolGroup> = {
   artifact_write: ToolGroup.Chat,
   swap_agent: ToolGroup.Chat,
   swap_to_default_agent: ToolGroup.Chat,
+  create_project_from_conversation: ToolGroup.Chat,
 
   search_tools: ToolGroup.Meta,
   run_tool: ToolGroup.Meta,
@@ -147,7 +148,7 @@ const toolGroups: Record<ArchestraToolShortName, ToolGroup> = {
   upload_file: ToolGroup.SkillSandbox,
   search_files: ToolGroup.SkillSandbox,
   read_file: ToolGroup.SkillSandbox,
-  save_result: ToolGroup.SkillSandbox,
+  save_file: ToolGroup.SkillSandbox,
   edit_file: ToolGroup.SkillSandbox,
   delete_file: ToolGroup.SkillSandbox,
 
@@ -157,6 +158,7 @@ const toolGroups: Record<ArchestraToolShortName, ToolGroup> = {
   render_app: ToolGroup.Apps,
   read_app: ToolGroup.Apps,
   edit_app: ToolGroup.Apps,
+  set_app_tools: ToolGroup.Apps,
   validate_app: ToolGroup.Apps,
   publish_app: ToolGroup.Apps,
   delete_app: ToolGroup.Apps,

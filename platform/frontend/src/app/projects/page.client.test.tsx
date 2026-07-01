@@ -8,6 +8,14 @@ const mockPinMutate = vi.fn();
 
 let mockProjects: ProjectFixture[] = [];
 
+type ApiKeyState = {
+  hasAnyApiKey: boolean;
+  isLoading: boolean;
+  isLoadError: boolean;
+  refetch: () => void;
+};
+let mockApiKeyState: ApiKeyState;
+
 type ProjectFixture = {
   id: string;
   name: string;
@@ -79,9 +87,7 @@ vi.mock("@/components/page-layout", () => ({
 }));
 
 vi.mock("@/components/no-api-key-setup", () => ({
-  NoApiKeySetup: ({ description }: { description: string }) => (
-    <p>{description}</p>
-  ),
+  NoApiKeySetup: () => <div data-testid="no-api-key-setup" />,
 }));
 
 vi.mock("@/components/agent-icon", () => ({
@@ -178,7 +184,15 @@ vi.mock("@/components/ui/textarea", () => ({
 }));
 
 vi.mock("@/lib/llm-provider-api-keys.query", () => ({
-  useHasAnyApiKey: () => ({ hasAnyApiKey: true, isLoading: false }),
+  useHasAnyApiKey: () => mockApiKeyState,
+}));
+
+vi.mock("@/components/api-key-load-error", () => ({
+  ApiKeyLoadError: ({ onRetry }: { onRetry: () => void }) => (
+    <button type="button" data-testid="api-key-load-error" onClick={onRetry}>
+      retry
+    </button>
+  ),
 }));
 
 vi.mock("@/lib/auth/auth.query", () => ({
@@ -197,6 +211,22 @@ vi.mock("@/lib/projects/projects.query", () => ({
     isPending: false,
   }),
   usePinProject: () => ({ mutate: mockPinMutate }),
+  // The edit dialog fetches the project detail by id; return a minimal one.
+  useProject: () => ({
+    data: {
+      id: "owner",
+      name: "Owner project",
+      description: null,
+      icon: null,
+      visibility: null,
+      shareTeamIds: null,
+    },
+  }),
+  useSetProjectShare: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+
+vi.mock("@/lib/teams/team.query", () => ({
+  useTeams: () => ({ data: [] }),
 }));
 
 vi.mock("@/lib/schedule-trigger.query", () => ({
@@ -209,6 +239,12 @@ describe("ProjectsPageClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockProjects = [];
+    mockApiKeyState = {
+      hasAnyApiKey: true,
+      isLoading: false,
+      isLoadError: false,
+      refetch: vi.fn(),
+    };
     mockDeleteMutateAsync.mockResolvedValue(true);
     mockUpdateMutateAsync.mockResolvedValue(true);
   });
@@ -269,6 +305,56 @@ describe("ProjectsPageClient", () => {
 
     fireEvent.click(screen.getByText("Delete"));
     expect(screen.getByText("Delete Owner project?")).toBeInTheDocument();
+  });
+
+  it("shows the load-error retry state, not the add-key prompt, when the keys request fails", () => {
+    const refetch = vi.fn();
+    mockApiKeyState = {
+      hasAnyApiKey: false,
+      isLoading: false,
+      isLoadError: true,
+      refetch,
+    };
+
+    render(<ProjectsPageClient />);
+
+    expect(screen.getByTestId("api-key-load-error")).toBeInTheDocument();
+    expect(screen.queryByTestId("no-api-key-setup")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("api-key-load-error"));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the add-key prompt when the keys request succeeds with no keys", () => {
+    mockApiKeyState = {
+      hasAnyApiKey: false,
+      isLoading: false,
+      isLoadError: false,
+      refetch: vi.fn(),
+    };
+
+    render(<ProjectsPageClient />);
+
+    expect(screen.getByTestId("no-api-key-setup")).toBeInTheDocument();
+    expect(screen.queryByTestId("api-key-load-error")).not.toBeInTheDocument();
+  });
+
+  it("keeps showing projects when a refetch fails but cached keys remain", () => {
+    // A failed background refetch after a prior success is not a load error,
+    // so the cached keys keep the project list on screen.
+    mockApiKeyState = {
+      hasAnyApiKey: true,
+      isLoading: false,
+      isLoadError: false,
+      refetch: vi.fn(),
+    };
+    mockProjects = [makeProject({ id: "plain", name: "Plain project" })];
+
+    render(<ProjectsPageClient />);
+
+    expect(screen.queryByTestId("api-key-load-error")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("no-api-key-setup")).not.toBeInTheDocument();
+    expect(screen.getByText("Plain project")).toBeInTheDocument();
   });
 
   it("shows unpin in pinned project card menus", () => {

@@ -14,6 +14,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 
 /** One row of a file list: a previewable item with a byte endpoint. */
@@ -24,77 +25,129 @@ export type FileListItem = {
   /** Byte endpoint; empty for in-memory items (no download link rendered). */
   contentUrl: string;
   source?: string;
+  /**
+   * The backing `files` row UUID, when distinct from `id`. The project sidebar
+   * keys rows on `downloadRef` (which may be a rowless `obj_` ref), so it carries
+   * the real row id here to gate editing — editing needs a row to overwrite.
+   */
+  rowId?: string | null;
 };
 
 /**
  * The chat Files panel's list section, shared so every files surface (chat
  * sidebar, project pages) renders identically: icon per file type, row click
- * selects/previews, trailing download link. The title header is shown only when
- * a `title` is given — callers omit it when the panel holds a single group, so
- * a lone set of files needs no header to tell it apart.
+ * selects/previews, trailing download link. The title header (and its optional
+ * `description` subtitle) is shown only when a `title` is given — the project
+ * page passes a single untitled group, so its lone list needs no header.
  */
 export function FileSection({
   title,
+  description,
   items,
   selectedId,
   onSelect,
   renderActions,
+  leading,
+  selection,
 }: {
   title?: string;
+  /** A secondary line under the title (e.g. the group's persistence scope). */
+  description?: string;
   items: FileListItem[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   /**
    * Custom trailing actions per row; return null/undefined to keep the
-   * default download link for that row.
+   * default download link for that row. Hidden while selecting.
    */
   renderActions?: (item: FileListItem) => ReactNode;
+  /** A pinned first row inside the card (e.g. the instructions entry). */
+  leading?: ReactNode;
+  /**
+   * When set, selectable rows show a checkbox and a row click toggles selection
+   * instead of opening; trailing actions are hidden while selecting. Rows for
+   * which `isSelectable` returns false get no checkbox and stay openable.
+   * Selection state lives in the caller — this component only renders it.
+   */
+  selection?: {
+    selectedIds: Set<string>;
+    onToggle: (id: string) => void;
+    isSelectable?: (id: string) => boolean;
+  };
 }) {
-  if (items.length === 0) return null;
+  if (items.length === 0 && !leading) return null;
+  const selecting = selection != null;
   return (
-    <div className="mb-4">
+    <div className="mb-5">
       {title && (
-        <p className="mb-1 px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          {title}
-        </p>
+        // One line — the group name, then its persistence scope after a middot,
+        // echoing the inline "name · description" of the instructions row below.
+        <div className="mb-1.5 flex items-baseline gap-1 px-1 text-[13px] leading-none">
+          <span className="font-medium text-muted-foreground">{title}</span>
+          {description && (
+            <span className="text-muted-foreground/60">· {description}</span>
+          )}
+        </div>
       )}
-      <div className="overflow-hidden rounded-md border">
+      <div className="overflow-hidden rounded-lg border border-border/60">
+        {leading}
         {items.map((item, i) => {
           const customActions = renderActions?.(item) ?? null;
           const isSelected = item.id === selectedId;
+          // Only selectable rows participate in selection mode; others (e.g. the
+          // in-memory artifact) keep their normal open-on-click behavior.
+          const rowSelectable =
+            selecting && (selection.isSelectable?.(item.id) ?? true);
+          const isChecked = selection?.selectedIds.has(item.id) ?? false;
           return (
             <div
               key={item.id}
               className={cn(
                 "flex items-center text-sm",
-                i > 0 && "border-t",
-                isSelected
-                  ? "bg-accent font-medium text-accent-foreground"
-                  : "hover:bg-muted/50",
+                (leading != null || i > 0) && "border-t",
+                rowSelectable && isChecked
+                  ? "bg-accent/60"
+                  : !selecting && isSelected
+                    ? "bg-accent font-medium text-accent-foreground"
+                    : "hover:bg-muted/50",
               )}
             >
-              {/* Clicking the row body opens the preview; the trailing actions
-                  are siblings, so we never nest interactive elements. */}
+              {rowSelectable && (
+                <Checkbox
+                  checked={isChecked}
+                  onCheckedChange={() => selection.onToggle(item.id)}
+                  aria-label={`Select ${item.name}`}
+                  className="ml-3"
+                />
+              )}
+              {/* Clicking the row body opens the preview (or toggles selection);
+                  the trailing actions are siblings, so we never nest
+                  interactive elements. */}
               <button
                 type="button"
-                onClick={() => onSelect(item.id)}
+                onClick={() =>
+                  rowSelectable
+                    ? selection.onToggle(item.id)
+                    : onSelect(item.id)
+                }
                 className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
               >
                 <FileRowIcon name={item.name} mimeType={item.mimeType} />
                 <span className="min-w-0 flex-1 truncate">{item.name}</span>
               </button>
-              {customActions ??
-                (item.contentUrl && (
-                  <a
-                    href={item.contentUrl}
-                    download={item.name}
-                    title={`Download ${item.name}`}
-                    className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-                  >
-                    <Download className="h-4 w-4" />
-                    <span className="sr-only">Download {item.name}</span>
-                  </a>
-                ))}
+              {!selecting &&
+                (customActions ??
+                  (item.contentUrl && (
+                    <a
+                      href={item.contentUrl}
+                      download={item.name}
+                      title={`Download ${item.name}`}
+                      className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <Download className="h-4 w-4" />
+                      <span className="sr-only">Download {item.name}</span>
+                    </a>
+                  )))}
             </div>
           );
         })}

@@ -6,9 +6,7 @@ import {
 } from "@/lib/auth/auth.query";
 import { canAccessMemorySettings } from "@/lib/auth/auth.utils";
 import { useFeature } from "@/lib/config/config.query";
-import config from "@/lib/config/config";
 import { useOrganization } from "@/lib/organization.query";
-
 import { useSecretsType } from "@/lib/secrets.query";
 
 export function useSettingsTabs() {
@@ -60,8 +58,10 @@ export function useSettingsTabs() {
     ...(permissionMap?.["/settings/github"]
       ? [{ label: "GitHub", href: "/settings/github" }]
       : []),
-    ...(config.enterpriseFeatures.core &&
-    permissionMap?.["/settings/identity-providers"]
+    // Always render the Identity Providers tab when the user has the
+    // permission — the destination page handles dimming when the enterprise
+    // license is inactive, no need to gate the nav entry as well.
+    ...(permissionMap?.["/settings/identity-providers"]
       ? [{ label: "Identity Providers", href: "/settings/identity-providers" }]
       : []),
     ...(secretsType?.type === "Vault" && permissionMap?.["/settings/secrets"]

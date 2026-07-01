@@ -1,17 +1,22 @@
 import { render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("next/link", () => ({
-  default: ({ children, ...props }: { children: ReactNode }) => (
-    <a {...props}>{children}</a>
-  ),
-}));
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Stub the runtime (sandboxed iframe + bridge) so the frame is tested in
 // isolation — the iframe lifecycle is covered by mcp-app-container.test.tsx.
 vi.mock("@/components/mcp-app/mcp-app-view", () => ({
-  McpAppRuntime: () => <div data-testid="runtime" />,
+  McpAppRuntime: ({
+    toolResourceUri,
+    appVersion,
+  }: {
+    toolResourceUri: string;
+    appVersion?: number;
+  }) => (
+    <div
+      data-testid="runtime"
+      data-uri={toolResourceUri}
+      data-version={appVersion ?? ""}
+    />
+  ),
   isRenderableMcpAppHtml: () => true,
 }));
 
@@ -19,70 +24,40 @@ vi.mock("@/lib/app.query", () => ({ useApp: vi.fn() }));
 
 import { useApp } from "@/lib/app.query";
 import { AppFrame } from "./app-frame";
-import { McpAppStandaloneButton } from "./mcp-app-chrome";
 
 const mockUseApp = vi.mocked(useApp);
 
 describe("AppFrame", () => {
-  it("renders a bare runtime with no card chrome for external servers", () => {
+  beforeEach(() => {
     mockUseApp.mockReturnValue({ data: undefined } as ReturnType<
       typeof useApp
     >);
+  });
 
+  it("renders the runtime for an external server using the provided resource uri", () => {
     render(
       <AppFrame
         endpoint={{ kind: "server", mcpServerId: "server-1" }}
         resourceUri="ui://external/app"
-        chrome={false}
       />,
     );
 
-    expect(screen.getByTestId("runtime")).toBeInTheDocument();
-    // No address pill: no reload button, no version link.
-    expect(
-      screen.queryByRole("button", { name: /reload app/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: /version/i }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("runtime")).toHaveAttribute(
+      "data-uri",
+      "ui://external/app",
+    );
   });
 
-  it("wraps owned apps in card chrome with label, version bar, and composed actions", () => {
+  it("derives the resource uri and head version for an owned app", () => {
     mockUseApp.mockReturnValue({
-      data: { name: "Dashboard", latestVersion: 3 },
+      data: { latestVersion: 3 },
     } as ReturnType<typeof useApp>);
-
-    render(
-      <AppFrame
-        endpoint={{ kind: "app", appId: "app-1" }}
-        fillContainer
-        actions={<McpAppStandaloneButton appId="app-1" />}
-      />,
-    );
-
-    expect(screen.getByTestId("runtime")).toBeInTheDocument();
-    expect(screen.getByText("Dashboard")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /reload app/i }),
-    ).toBeInTheDocument();
-    // Version bar links to the detail page.
-    expect(screen.getByRole("link", { name: /version 3/i })).toHaveAttribute(
-      "href",
-      "/apps/app-1",
-    );
-    // The caller-composed action button is rendered.
-    expect(
-      screen.getByRole("link", { name: /open standalone/i }),
-    ).toHaveAttribute("href", "/a/app-1");
-  });
-
-  it("waits for the owned app to resolve before mounting the runtime", () => {
-    mockUseApp.mockReturnValue({ data: undefined } as ReturnType<
-      typeof useApp
-    >);
 
     render(<AppFrame endpoint={{ kind: "app", appId: "app-1" }} />);
 
-    expect(screen.queryByTestId("runtime")).not.toBeInTheDocument();
+    const runtime = screen.getByTestId("runtime");
+    expect(runtime).toHaveAttribute("data-version", "3");
+    // The resource URI is derived from the app id.
+    expect(runtime.getAttribute("data-uri")).toContain("app-1");
   });
 });

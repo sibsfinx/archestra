@@ -31,6 +31,7 @@ import {
   isNull,
   ne,
   or,
+  type SQL,
   sql,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -39,7 +40,7 @@ import { getArchestraMcpTools } from "@/archestra-mcp-server";
 import { archestraMcpBranding } from "@/archestra-mcp-server/branding";
 import { getArchestraMcpCatalogMetadata } from "@/archestra-mcp-server/metadata";
 import config from "@/config";
-import db, { schema } from "@/database";
+import db, { schema, type Transaction } from "@/database";
 import { notDeleted } from "@/database/schemas/soft-deletable-table";
 import { ARCHESTRA_TOOL_NAME_UNIQUE_INDEX } from "@/database/schemas/tool";
 import {
@@ -92,8 +93,8 @@ class ToolModel {
     return serverName !== null ? toolName : slugifiedName;
   }
 
-  static async create(tool: InsertTool): Promise<Tool> {
-    const [createdTool] = await db
+  static async create(tool: InsertTool, tx?: Transaction): Promise<Tool> {
+    const [createdTool] = await (tx ?? db)
       .insert(schema.toolsTable)
       .values(tool)
       .returning();
@@ -640,6 +641,21 @@ class ToolModel {
       return [];
     }
 
+    // Catalog visibility is broader than install access: an org-scoped catalog
+    // is visible to every member, but its only installs may be other users'
+    // personal servers. Narrow the discovery space to catalogs the caller has
+    // an accessible install of (own personal + team + org) so search_tools /
+    // run_tool cannot reach another user's personal server. The built-in
+    // Archestra catalog runs in-process with no install row, so it stays in.
+    const installedCatalogIds =
+      await McpServerModel.getAccessibleInstallCatalogIds(params.userId);
+    const scopedCatalogIds = catalogIds.filter(
+      (id) => id === ARCHESTRA_MCP_CATALOG_ID || installedCatalogIds.has(id),
+    );
+    if (scopedCatalogIds.length === 0) {
+      return [];
+    }
+
     // Secondary sort on id keeps the ordering deterministic when createdAt
     // ties (bulk-inserted MCP tools share a timestamp), so search_tools and
     // run_tool auto-assignment resolve a duplicate name to the same row.
@@ -648,7 +664,7 @@ class ToolModel {
       .from(schema.toolsTable)
       .where(
         and(
-          inArray(schema.toolsTable.catalogId, catalogIds),
+          inArray(schema.toolsTable.catalogId, scopedCatalogIds),
           eq(schema.toolsTable.clonedPendingDiscovery, false),
           toolInEnvironmentPredicate(params.environmentId),
           params.name !== undefined
@@ -1021,23 +1037,30 @@ class ToolModel {
     });
 
     if (discoveredArchestraTools.length > 0) {
-      // Promote only names not already present in the catalog, and at most one
-      // discovered row per name. Promoting a colliding/duplicate name would violate
-      // the (catalog_id, name) unique index. Redundant discovered rows are left as-is
-      // (catalog_id = NULL, not surfaced as catalog tools) rather than deleted, to avoid
-      // cascading their agent assignments.
-      const claimedNames = new Set(
+      // Promote at most one discovered row per built-in SHORT name, and only when
+      // that short name isn't already in the catalog. Deduping by short name (not by
+      // full name) is what stops a default-prefixed `archestra__X` discovery from
+      // being adopted alongside an already-branded `archestra_staging__X` — the
+      // dual-prefix duplicate that 0285 had to collapse. Promoting a colliding full
+      // name would also violate the (catalog_id, name) unique index. Redundant
+      // discovered rows are left as-is (catalog_id = NULL, not surfaced as catalog
+      // tools) rather than deleted, to avoid cascading their agent assignments.
+      const claimedShortNames = new Set(
         (
           await db
             .select({ name: schema.toolsTable.name })
             .from(schema.toolsTable)
             .where(eq(schema.toolsTable.catalogId, catalogId))
-        ).map((tool) => tool.name),
+        )
+          .map((tool) => extractArchestraBuiltInShortName(tool.name))
+          .filter((shortName): shortName is string => shortName !== null),
       );
       const idsToPromote: string[] = [];
       for (const tool of discoveredArchestraTools) {
-        if (!claimedNames.has(tool.name)) {
-          claimedNames.add(tool.name);
+        // discoveredArchestraTools is pre-filtered to rows with a built-in short name.
+        const shortName = extractArchestraBuiltInShortName(tool.name);
+        if (shortName !== null && !claimedShortNames.has(shortName)) {
+          claimedShortNames.add(shortName);
           idsToPromote.push(tool.id);
         }
       }
@@ -1359,7 +1382,7 @@ class ToolModel {
    *
    * - Runtime tools (run_command/upload_file/download_file): assigned when the
    *   skills-sandbox runtime is on (`config.skillsSandbox.enabled`).
-   * - Persistent-files (Projects) tools (search_files/read_file/save_result/
+   * - Persistent-files (Projects) tools (search_files/read_file/save_file/
    *   edit_file/delete_file): also require the Projects flag
    *   (`config.projects.enabled`) — they need the runtime to run AND Projects to
    *   be exposed (see `isSandboxToolEnabled`), so gating assignment on both
@@ -1990,19 +2013,6 @@ class ToolModel {
       .where(inArray(schema.toolsTable.catalogId, catalogIds));
 
     return tools.map((t) => t.id);
-  }
-
-  /**
-   * Delete all tools for a specific catalog item
-   * Used when the last MCP server installation for a catalog is removed
-   * Returns the number of tools deleted
-   */
-  static async deleteByCatalogId(catalogId: string): Promise<number> {
-    const result = await db
-      .delete(schema.toolsTable)
-      .where(eq(schema.toolsTable.catalogId, catalogId));
-
-    return result.rowCount || 0;
   }
 
   /**
@@ -3058,4 +3068,19 @@ export function parseArchestraBuiltInName(toolName: string): {
 
 function extractArchestraBuiltInShortName(toolName: string): string | null {
   return parseArchestraBuiltInName(toolName).shortName;
+}
+
+/**
+ * SQL expression resolving a tool's MCP App `ui://` resource URI, or NULL when
+ * the tool is not a UI app. Canonical `_meta.ui.resourceUri` first, then the
+ * legacy flat `ui/resourceUri` key; both must use the `ui://` scheme. Shared by
+ * the external-apps listing and the catalog list's `providesUi` flag so the two
+ * never drift.
+ */
+export function toolUiResourceUriSql(): SQL<string | null> {
+  const meta = schema.toolsTable.meta;
+  return sql<string | null>`coalesce(
+    case when ${meta}->'_meta'->'ui'->>'resourceUri' like 'ui://%' then ${meta}->'_meta'->'ui'->>'resourceUri' end,
+    case when ${meta}->'_meta'->>'ui/resourceUri' like 'ui://%' then ${meta}->'_meta'->>'ui/resourceUri' end
+  )`;
 }

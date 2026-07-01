@@ -15,10 +15,10 @@ import { userHasPermission } from "@/auth/utils";
 import config from "@/config";
 import logger from "@/logging";
 import {
+  AppAccessModel,
   AppModel,
   AppRenderDiagnosticsModel,
   AppRenderScreenshotModel,
-  AppTeamModel,
   AppToolModel,
   AppVersionModel,
   McpServerModel,
@@ -33,6 +33,15 @@ import {
   callerIsAppAdmin,
   resolveOrgTeamIds,
 } from "@/services/apps/app-authorization";
+import {
+  createSeededAppConversation,
+  createSeededExternalAppConversation,
+} from "@/services/apps/app-chat-conversation";
+import {
+  createAppBacking,
+  deleteAppBacking,
+  syncAppBacking,
+} from "@/services/apps/app-mcp-backing";
 import { buildValidatedVersionPayload } from "@/services/apps/app-ui-policy";
 import { assertCanAssignEnvironment } from "@/services/environments/environment";
 import {
@@ -46,18 +55,22 @@ import {
   CredentialResolutionModeSchema,
   constructResponseSchema,
   DeleteObjectResponseSchema,
-  ExternalAppListItemSchema,
+  ExternalAppResolutionSchema,
   SelectAppSchema,
   SelectAppVersionSchema,
   SelectToolSchema,
   UpdateAppSchema,
   UuidIdSchema,
 } from "@/types";
+import { isUniqueConstraintError } from "@/utils/db";
 
 // REST bodies extend the shared create/update schemas with team assignments,
 // which only the REST surface needs for team-scoped apps.
 const CreateAppBodySchema = CreateAppSchema.extend({
   teamIds: z.array(UuidIdSchema).optional(),
+  // When set, also create a chat conversation with this app already rendered, so
+  // the client opens it directly at `/chat/<conversationId>` with no model turn.
+  openInChat: z.boolean().optional(),
 });
 const UpdateAppBodySchema = UpdateAppSchema.extend({
   teamIds: z.array(UuidIdSchema).optional(),
@@ -67,6 +80,23 @@ const UpdateAppBodySchema = UpdateAppSchema.extend({
 // succeeded; the html has structural issues worth surfacing to the author).
 const AppWithWarningsSchema = SelectAppSchema.extend({
   warnings: z.array(z.string()).optional(),
+});
+
+// Create response additionally carries the seeded chat conversation id when the
+// app was created with `openInChat` (absent if seeding was skipped or failed).
+const CreateAppResponseSchema = AppWithWarningsSchema.extend({
+  conversationId: z.string().uuid().optional(),
+});
+
+// open-in-chat returns the seeded conversation to navigate to (`/chat/<id>`).
+const OpenAppInChatResponseSchema = z.object({
+  conversationId: z.string().uuid(),
+});
+
+// The single-app GET resolves the app's team assignments so the detail page can
+// render team-name badges and seed the visibility editor.
+const AppWithTeamsSchema = SelectAppSchema.extend({
+  teams: z.array(z.object({ id: z.string(), name: z.string() })),
 });
 
 const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
@@ -98,13 +128,7 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
       // and external UI-providing installed MCP servers. Both are access-filtered
       // by their own model; we merge, sort, and paginate over the combined set.
       // Cardinality is small (tens), so fetching all-then-slicing is fine.
-      const isMcpServerAdmin = await userHasPermission(
-        user.id,
-        organizationId,
-        "mcpServerInstallation",
-        "admin",
-      );
-      const accessibleAppIds = await AppTeamModel.getUserAccessibleAppIds({
+      const accessibleAppIds = await AppAccessModel.getUserAccessibleAppIds({
         organizationId,
         userId: user.id,
       });
@@ -117,7 +141,7 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
         AppModel.countByOrganization(ownedFilters),
         McpServerModel.findUiCapableForCaller({
           userId: user.id,
-          isMcpServerAdmin,
+          organizationId,
           ...(query.search ? { search: query.search } : {}),
         }),
       ]);
@@ -139,14 +163,16 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
           executionModel: "viewer-scoped" as const,
           cspOrigin: "platform-pinned" as const,
         })),
-        ...external.map((server) => ({
+        ...external.map((catalogApp) => ({
           source: "external" as const,
-          mcpServerId: server.mcpServerId,
-          name: server.name,
-          description: server.description,
-          scope: server.scope,
-          authorId: server.ownerId,
-          resourceUri: server.resourceUri,
+          catalogId: catalogApp.catalogId,
+          mcpServerId: catalogApp.mcpServerId,
+          scope: catalogApp.scope,
+          // "Server / Tool" as the title (short tool name, never the slug
+          // prefix); the tool's own description as the subtitle.
+          name: `${catalogApp.serverName} / ${catalogApp.toolName}`,
+          description: catalogApp.toolDescription,
+          resourceUri: catalogApp.resourceUri,
           executionModel: "server-scoped" as const,
           cspOrigin: "author-declared" as const,
         })),
@@ -161,45 +187,27 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
   );
 
   fastify.get(
-    "/api/apps/external/:mcpServerId",
+    "/api/apps/external/:catalogId",
     {
       schema: {
         operationId: RouteId.GetExternalApp,
         description:
-          "Resolve a single external UI-providing app entry by installed MCP server id (for the standalone run page).",
+          "Resolve an external UI-providing app by catalog id: its UI resource and the caller's accessible installs (for the standalone run page's install selector).",
         tags: ["Apps"],
-        params: z.object({ mcpServerId: UuidIdSchema }),
-        response: constructResponseSchema(ExternalAppListItemSchema),
+        params: z.object({ catalogId: UuidIdSchema }),
+        response: constructResponseSchema(ExternalAppResolutionSchema),
       },
     },
     async ({ params, user, organizationId }, reply) => {
-      const isMcpServerAdmin = await userHasPermission(
-        user.id,
-        organizationId,
-        "mcpServerInstallation",
-        "admin",
-      );
-      const candidates = await McpServerModel.findUiCapableForCaller({
+      const resolved = await McpServerModel.findCatalogAppForCaller({
         userId: user.id,
-        isMcpServerAdmin,
+        organizationId,
+        catalogId: params.catalogId,
       });
-      const match = candidates.find(
-        (server) => server.mcpServerId === params.mcpServerId,
-      );
-      if (!match) {
+      if (!resolved) {
         throw new ApiError(404, "Not found");
       }
-      return reply.send({
-        source: "external",
-        mcpServerId: match.mcpServerId,
-        name: match.name,
-        description: match.description,
-        scope: match.scope,
-        authorId: match.ownerId,
-        resourceUri: match.resourceUri,
-        executionModel: "server-scoped",
-        cspOrigin: "author-declared",
-      });
+      return reply.send(resolved);
     },
   );
 
@@ -226,7 +234,7 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
         description: "Create a new MCP App.",
         tags: ["Apps"],
         body: CreateAppBodySchema,
-        response: constructResponseSchema(AppWithWarningsSchema),
+        response: constructResponseSchema(CreateAppResponseSchema),
       },
     },
     async ({ body, user, organizationId }, reply) => {
@@ -252,31 +260,128 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
       });
       const { html, seededFromTemplate } = resolveCreateAppHtml({
         html: body.html,
+        name: body.name,
       });
       const { payload, warnings } = await buildValidatedVersionPayload({
         html,
         uiPermissions: body.uiPermissions,
       });
-      const app = await AppModel.create({
+      // App names are unique per author (apps_org_author_name_uidx); a duplicate
+      // fails this insert before any backing is created.
+      const created = await AppModel.create({
         app: {
           organizationId,
           authorId: user.id,
-          scope,
           name: body.name,
           description: body.description ?? null,
           templateId: seededFromTemplate ? DEFAULT_APP_TEMPLATE_ID : null,
-          environmentId: body.environmentId ?? null,
         },
         payload,
-        teamIds,
+      }).catch((error) => {
+        if (isUniqueConstraintError(error)) {
+          throw new ApiError(
+            409,
+            `You already have an app named "${body.name}".`,
+          );
+        }
+        throw error;
       });
-      if (!app) {
-        throw new ApiError(
-          409,
-          `An app named "${body.name}" already exists in this scope.`,
-        );
+      // An app must never exist without its backing (the catalog owns its
+      // visibility + environment); on backing failure delete the app row.
+      try {
+        await createAppBacking({
+          app: created,
+          scope,
+          environmentId: body.environmentId ?? null,
+          userId: user.id,
+          organizationId,
+          teamIds,
+        });
+      } catch (error) {
+        await AppModel.purge(created.id);
+        throw error;
       }
-      return reply.send(warnings.length > 0 ? { ...app, warnings } : app);
+      const app = await AppModel.findById(created.id);
+      if (!app) throw new ApiError(500, "App created but could not be loaded.");
+
+      // Optionally open the new app in chat in this same request: seed a
+      // conversation with the app already rendered so the client navigates
+      // straight to `/chat/<conversationId>`. Best-effort — the app is created
+      // regardless; if seeding fails (e.g. no LLM configured) we return the app
+      // without a conversationId and the client falls back to the apps page.
+      let conversationId: string | undefined;
+      if (body.openInChat) {
+        try {
+          ({ conversationId } = await createSeededAppConversation({
+            appId: app.id,
+            userId: user.id,
+            organizationId,
+          }));
+        } catch (error) {
+          logger.warn(
+            { err: error, appId: app.id },
+            "Failed to seed chat conversation for newly created app",
+          );
+        }
+      }
+
+      return reply.send({
+        ...app,
+        ...(warnings.length > 0 ? { warnings } : {}),
+        ...(conversationId ? { conversationId } : {}),
+      });
+    },
+  );
+
+  fastify.post(
+    "/api/apps/:appId/open-in-chat",
+    {
+      schema: {
+        operationId: RouteId.OpenAppInChat,
+        description:
+          "Open an existing app in chat: create a conversation with the app already rendered (no model turn) and return its id to navigate to.",
+        tags: ["Apps"],
+        params: z.object({ appId: UuidIdSchema }),
+        response: constructResponseSchema(OpenAppInChatResponseSchema),
+      },
+    },
+    async ({ params: { appId }, user, organizationId }, reply) => {
+      // The service re-checks app visibility (404s if the caller can't view it).
+      const { conversationId } = await createSeededAppConversation({
+        appId,
+        userId: user.id,
+        organizationId,
+      });
+      return reply.send({ conversationId });
+    },
+  );
+
+  fastify.post(
+    "/api/apps/external/:mcpServerId/open-in-chat",
+    {
+      schema: {
+        operationId: RouteId.OpenExternalAppInChat,
+        description:
+          "Open an external (MCP-server) UI app in chat: create a conversation with the app rendered against the given install (no model turn) and return its id to navigate to.",
+        tags: ["Apps"],
+        params: z.object({ mcpServerId: UuidIdSchema }),
+        body: z.object({ resourceUri: z.string().min(1) }),
+        response: constructResponseSchema(OpenAppInChatResponseSchema),
+      },
+    },
+    async (
+      { params: { mcpServerId }, body: { resourceUri }, user, organizationId },
+      reply,
+    ) => {
+      // The service re-checks install access + that the resource exists (404s
+      // otherwise).
+      const { conversationId } = await createSeededExternalAppConversation({
+        mcpServerId,
+        resourceUri,
+        userId: user.id,
+        organizationId,
+      });
+      return reply.send({ conversationId });
     },
   );
 
@@ -288,7 +393,7 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
         description: "Get a single app by id, if the caller may view it.",
         tags: ["Apps"],
         params: z.object({ appId: UuidIdSchema }),
-        response: constructResponseSchema(SelectAppSchema),
+        response: constructResponseSchema(AppWithTeamsSchema),
       },
     },
     async ({ params: { appId }, user, organizationId }, reply) => {
@@ -297,7 +402,8 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
         userId: user.id,
         organizationId,
       });
-      return reply.send(app);
+      const teamsByApp = await AppAccessModel.getTeamDetailsForApps([app.id]);
+      return reply.send({ ...app, teams: teamsByApp.get(app.id) ?? [] });
     },
   );
 
@@ -329,7 +435,7 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
         userId: user.id,
         organizationId,
       });
-      const resourceTeamIds = await AppTeamModel.getTeamsForApp(app.id);
+      const resourceTeamIds = await AppAccessModel.getTeamsForApp(app.id);
       const nextTeamIds =
         body.teamIds !== undefined
           ? await resolveOrgTeamIds(body.teamIds, organizationId)
@@ -415,10 +521,20 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
         ...(Object.keys(patch).length > 0 ? { patch } : {}),
         ...(version ? { version } : {}),
         ...(nextTeamIds !== undefined ? { teamIds: nextTeamIds } : {}),
+      }).catch((error) => {
+        // A rename into a name this author already uses hits apps_org_author_name_uidx.
+        if (body.name !== undefined && isUniqueConstraintError(error)) {
+          throw new ApiError(
+            409,
+            `You already have an app named "${body.name}".`,
+          );
+        }
+        throw error;
       });
       if (!updated) {
         throw new ApiError(404, `No app found with id ${appId}.`);
       }
+      await syncAppBacking(updated);
       return reply.send(
         warnings.length > 0 ? { ...updated, warnings } : updated,
       );
@@ -447,12 +563,13 @@ const appRoutes: FastifyPluginAsyncZod = async (fastify) => {
         organizationId,
         scope: app.scope,
         authorId: app.authorId,
-        resourceTeamIds: await AppTeamModel.getTeamsForApp(app.id),
+        resourceTeamIds: await AppAccessModel.getTeamsForApp(app.id),
       });
       const success = await AppModel.delete(appId);
       if (!success) {
         throw new ApiError(404, `No app found with id ${appId}.`);
       }
+      await deleteAppBacking(app);
       logger.info({ appId, userId: user.id }, "App deleted via REST");
       return reply.send({ success });
     },
@@ -722,7 +839,7 @@ async function assertCallerMayModifyAppById(params: {
     organizationId: params.organizationId,
     scope: app.scope,
     authorId: app.authorId,
-    resourceTeamIds: await AppTeamModel.getTeamsForApp(app.id),
+    resourceTeamIds: await AppAccessModel.getTeamsForApp(app.id),
   });
 }
 

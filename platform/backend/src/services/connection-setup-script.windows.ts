@@ -1,4 +1,4 @@
-import { DEFAULT_APP_NAME } from "@archestra/shared";
+import { DEFAULT_APP_NAME, VIRTUAL_KEY_HEADER } from "@archestra/shared";
 import type { ConnectionSetupClientId } from "@/types";
 import type {
   SetupScriptContext,
@@ -205,7 +205,7 @@ function nextStepsFor(ctx: SetupScriptContext): string[] {
       }
       if (ctx.skills) {
         steps.push(
-          `Run /plugin marketplace browse ${ctx.skills.marketplaceName} inside Claude Code to install the shared skills.`,
+          "The shared skills are installed for Claude Code — start `claude` and they load automatically.",
         );
       }
       break;
@@ -338,9 +338,12 @@ claude mcp add --transport http ${psq(ctx.mcp.serverName)} ${psq(ctx.mcp.url)}`)
   }
 
   if (ctx.skills) {
-    sections.push(`Say ${psq(`Registering the "${ctx.skills.marketplaceName}" skills marketplace`)}
+    const pluginRef = `${ctx.skills.marketplaceName}@${ctx.skills.marketplaceName}`;
+    sections.push(`Say ${psq(`Installing the "${ctx.skills.marketplaceName}" skills bundle`)}
 claude plugin marketplace add ${psq(ctx.skills.cloneUrl)}
-if ($LASTEXITCODE -ne 0) { Warn 'Marketplace may already be registered — run /plugin inside Claude Code to inspect.' }`);
+if ($LASTEXITCODE -ne 0) { Warn 'Marketplace may already be registered — continuing.' }
+claude plugin install ${psq(pluginRef)}
+if ($LASTEXITCODE -ne 0) { Warn ${psq(`Could not install the skills automatically — run 'claude plugin install ${pluginRef}' or open /plugin inside Claude Code.`)} }`);
   }
 
   return sections;
@@ -356,6 +359,11 @@ function claudeAnthropicProxySection(proxy: SetupScriptProxySection): string {
   if (proxy.virtualKey) {
     values.ANTHROPIC_AUTH_TOKEN = proxy.virtualKey;
   }
+  // Passthrough attribution: append the X-Archestra-Virtual-Key header after the
+  // base-URL merge, preserving any custom headers the user already set.
+  const headerAppend = proxy.passthroughVirtualKey
+    ? `\n${claudeCustomHeaderAppendSnippet(`${VIRTUAL_KEY_HEADER}: ${proxy.passthroughVirtualKey}`)}`
+    : "";
   const passthroughNote = proxy.virtualKey
     ? ""
     : `
@@ -366,7 +374,38 @@ ${mergeJsonFileSnippet({
   pathExpr: CLAUDE_SETTINGS_PATH,
   nestedKey: "env",
   values,
-})}${passthroughNote}`;
+})}${headerAppend}${passthroughNote}`;
+}
+
+/**
+ * Append-merge a single header into env.ANTHROPIC_CUSTOM_HEADERS in
+ * settings.json: keep the user's other headers, replace only our line (matched
+ * case-insensitively by header name) so re-runs / key rotation never duplicate
+ * or leave a stale token. Runs right after the base-URL merge created the file,
+ * so it neither re-creates the dir nor re-takes the backup.
+ */
+function claudeCustomHeaderAppendSnippet(headerLine: string): string {
+  return `$arch_hpath = ${CLAUDE_SETTINGS_PATH}
+$arch_hconfig = [pscustomobject]@{}
+if (Test-Path $arch_hpath) {
+  $arch_hraw = Get-Content -Raw -Path $arch_hpath
+  if ($arch_hraw -and $arch_hraw.Trim()) { $arch_hconfig = $arch_hraw | ConvertFrom-Json }
+}
+if (-not $arch_hconfig.PSObject.Properties['env']) { $arch_hconfig | Add-Member -NotePropertyName 'env' -NotePropertyValue ([pscustomobject]@{}) }
+$arch_henv = $arch_hconfig.env
+$arch_hline = ${psq(headerLine)}
+$arch_hname = ($arch_hline -split ':',2)[0].Trim().ToLower()
+$arch_hexisting = ''
+if ($arch_henv.PSObject.Properties['ANTHROPIC_CUSTOM_HEADERS']) { $arch_hexisting = [string]$arch_henv.ANTHROPIC_CUSTOM_HEADERS }
+$arch_hkept = @()
+foreach ($arch_hl in ($arch_hexisting -split "\\r?\\n")) {
+  if ($arch_hl.Trim() -and (($arch_hl -split ':',2)[0].Trim().ToLower() -ne $arch_hname)) { $arch_hkept += $arch_hl }
+}
+$arch_hkept += $arch_hline
+$arch_hjoined = ($arch_hkept -join "\`n")
+if ($arch_henv.PSObject.Properties['ANTHROPIC_CUSTOM_HEADERS']) { $arch_henv.ANTHROPIC_CUSTOM_HEADERS = $arch_hjoined } else { $arch_henv | Add-Member -NotePropertyName 'ANTHROPIC_CUSTOM_HEADERS' -NotePropertyValue $arch_hjoined }
+$arch_hconfig | ConvertTo-Json -Depth 32 | Set-Content -Path $arch_hpath -Encoding utf8
+Write-Host ('Updated ' + $arch_hpath)`;
 }
 
 function claudeBedrockProxySection(proxy: SetupScriptProxySection): string {

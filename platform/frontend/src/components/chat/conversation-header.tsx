@@ -4,6 +4,7 @@ import type { archestraApiTypes } from "@archestra/shared";
 import {
   Download,
   FileText,
+  FolderPlus,
   Globe,
   MoreHorizontal,
   MoreVertical,
@@ -11,6 +12,8 @@ import {
   Share2,
   Users,
 } from "lucide-react";
+import Link from "next/link";
+import { AgentIcon } from "@/components/agent-icon";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -21,6 +24,7 @@ import {
 import { TruncatedTooltip } from "@/components/ui/truncated-tooltip";
 import { TypingText } from "@/components/ui/typing-text";
 import { getConversationDisplayTitle } from "@/lib/chat/chat-utils";
+import { useProject } from "@/lib/projects/projects.query";
 import { cn } from "@/lib/utils";
 import type { RightPanelTab } from "./right-side-panel";
 
@@ -46,8 +50,11 @@ interface ConversationHeaderProps {
   isTitleAnimating: boolean;
   canManageShare: boolean;
   isShared: boolean;
+  /** Whether this chat is eligible to be turned into a project. */
+  canCreateProject: boolean;
   onShare: () => void;
   onExportMarkdown: () => void;
+  onCreateProject: () => void;
   panel: PanelControls;
 }
 
@@ -58,16 +65,20 @@ export function ConversationHeader({
   isTitleAnimating,
   canManageShare,
   isShared,
+  canCreateProject,
   onShare,
   onExportMarkdown,
+  onCreateProject,
   panel,
 }: ConversationHeaderProps) {
   const actionsProps = {
     canManageShare,
     isShared,
+    canCreateProject,
     messageCount,
     onShare,
     onExportMarkdown,
+    onCreateProject,
   };
 
   return (
@@ -81,7 +92,13 @@ export function ConversationHeader({
         {/* Left side - conversation title + actions */}
         <div className="flex items-center gap-1 min-w-0">
           {conversationId && conversation && (
-            <div className="flex items-center flex-shrink min-w-0">
+            <div className="flex items-center flex-shrink min-w-0 gap-1">
+              {/* Project chats read as "{ProjectName}/{Chat title}" — the
+                  project segment (emoji + name, like the sidebar) links to the
+                  project. Hidden for viewers without project access. */}
+              {conversation.projectId && (
+                <ProjectTitlePrefix projectId={conversation.projectId} />
+              )}
               {/* Skip TruncatedTooltip while the title animates: its resize
                   measurement re-renders on every TypingText tick, which loops
                   past React's nested-update cap. */}
@@ -201,19 +218,53 @@ export function ConversationHeader({
   );
 }
 
-/** Share + Export Markdown menu items, shared by the desktop and mobile menus. */
+/**
+ * Clickable "{emoji ProjectName} /" segment shown before the chat title when a
+ * conversation belongs to a project. Fetches the project so the emoji matches
+ * the sidebar; renders nothing while loading or when the viewer can't read the
+ * project (the query resolves to null on a not-found, so no error surfaces).
+ */
+function ProjectTitlePrefix({ projectId }: { projectId: string }) {
+  const { data: project } = useProject(projectId);
+
+  if (!project) {
+    return null;
+  }
+
+  return (
+    <>
+      <Link
+        href={`/projects/${projectId}`}
+        title={project.name}
+        className="flex items-center gap-1 min-w-0 max-w-[180px] text-base font-normal text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <AgentIcon icon={project.icon} fallbackType="project" size={16} />
+        <span className="truncate">{project.name}</span>
+      </Link>
+      <span className="text-muted-foreground/50 select-none" aria-hidden="true">
+        /
+      </span>
+    </>
+  );
+}
+
+/** Share / Export / Create project menu items, shared by desktop + mobile menus. */
 function ChatActionItems({
   canManageShare,
   isShared,
+  canCreateProject,
   messageCount,
   onShare,
   onExportMarkdown,
+  onCreateProject,
 }: {
   canManageShare: boolean;
   isShared: boolean;
+  canCreateProject: boolean;
   messageCount: number;
   onShare: () => void;
   onExportMarkdown: () => void;
+  onCreateProject: () => void;
 }) {
   return (
     <>
@@ -230,6 +281,12 @@ function ChatActionItems({
               Share
             </>
           )}
+        </DropdownMenuItem>
+      )}
+      {canCreateProject && (
+        <DropdownMenuItem onSelect={onCreateProject}>
+          <FolderPlus className="h-4 w-4" />
+          Create project
         </DropdownMenuItem>
       )}
       {messageCount > 0 && (

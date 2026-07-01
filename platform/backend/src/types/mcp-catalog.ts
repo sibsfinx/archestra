@@ -18,7 +18,18 @@ export const InternalMcpCatalogServerTypeSchema = z.enum([
   "local",
   "remote",
   "builtin",
+  // Platform-authored MCP App: in-process, HTML-backed, viewer-scoped. Backs a
+  // real mcp_server exposing an `open` launch tool, but opts out of K8s deploy /
+  // install / cascade / discovery. Served in-process via the owned-app builder.
+  "app",
 ]);
+
+/**
+ * Image-approval state for a personal local catalog item gated by an
+ * environment's trusted image registries. `pending` = blocked, awaiting an
+ * admin; `approved` = installs proceed. NULL on the row = no decision recorded.
+ */
+export const CatalogItemApprovalStatusSchema = z.enum(["pending", "approved"]);
 
 // Define Zod schemas for complex JSONB fields
 const AuthFieldSchema = z.object({
@@ -110,6 +121,18 @@ const PRESET_COLUMNS_OMIT = {
   presetSecretId: true,
 } as const;
 
+// The catalog-item image-approval flag is system/admin-managed: set by the
+// install gate (services/mcp-install-policy.ts) and the approve/decline
+// endpoints, never writable through the catalog create/edit API — otherwise a
+// `mcpRegistry:update` holder could self-approve. Omitted from the derived
+// insert/update schemas (but kept on the select schema).
+const CATALOG_ITEM_APPROVAL_COLUMNS_OMIT = {
+  catalogItemApprovalStatus: true,
+  catalogItemApprovalReason: true,
+  catalogItemApprovalReviewedBy: true,
+  catalogItemApprovalReviewedAt: true,
+} as const;
+
 export const SelectInternalMcpCatalogSchema = createSelectSchema(
   schema.internalMcpCatalogTable,
 )
@@ -122,6 +145,10 @@ export const SelectInternalMcpCatalogSchema = createSelectSchema(
     enterpriseManagedConfig: EnterpriseManagedCredentialConfigSchema.nullable(),
     localConfig: LocalConfigSelectSchema.nullable(),
     clonedFrom: z.string().uuid().nullable(),
+    // Serialized as a nullable string (not the enum) because the OpenAPI client
+    // generator drops `null` from a `nullable` enum; the column keeps its
+    // `$type<CatalogItemApprovalStatus>` and the model methods stay typed.
+    catalogItemApprovalStatus: z.string().nullable(),
     // Labels are loaded from the junction table, not from the DB row
     labels: z.array(CatalogLabelSchema).default([]),
     // Teams are loaded from the junction table, not from the DB row
@@ -132,6 +159,20 @@ export const SelectInternalMcpCatalogSchema = createSelectSchema(
 export const ListInternalMcpCatalogSchema =
   SelectInternalMcpCatalogSchema.extend({
     toolCount: z.number().int().default(0),
+    // True when the catalog exposes a tool with a `ui://` MCP App resource —
+    // an external UI-providing server or an owned-app backing. Derived from the
+    // catalog's tools (see InternalMcpCatalogModel.getToolStats). Optional so
+    // callers constructing catalog items (e.g. the legacy registry) need not set
+    // it; the model always populates it on list reads.
+    providesUi: z.boolean().optional(),
+    // For `serverType:"app"` backings only, the id of the app they back, so the
+    // registry can link to / manage the app. Populated only on the includeApps
+    // path; null for everything else.
+    appId: z.string().nullable().optional(),
+    // True when installing this item right now would be blocked by the trusted-
+    // image-registry gate (gated + not approved), so the registry can prevent the
+    // install up front. Populated on the list route only.
+    imageApprovalRequired: z.boolean().optional(),
   });
 
 const InsertInternalMcpCatalogSchemaBase = createInsertSchema(
@@ -164,6 +205,7 @@ const InsertInternalMcpCatalogSchemaBase = createInsertSchema(
     organizationId: true,
     authorId: true,
     ...PRESET_COLUMNS_OMIT,
+    ...CATALOG_ITEM_APPROVAL_COLUMNS_OMIT,
   });
 
 export const InsertInternalMcpCatalogSchema =
@@ -201,6 +243,7 @@ const UpdateInternalMcpCatalogSchemaBase = createUpdateSchema(
     // Clone lineage is locked after creation
     clonedFrom: true,
     ...PRESET_COLUMNS_OMIT,
+    ...CATALOG_ITEM_APPROVAL_COLUMNS_OMIT,
   });
 
 export const UpdateInternalMcpCatalogSchema =
@@ -213,6 +256,10 @@ export const PartialUpdateInternalMcpCatalogSchema =
 
 export type InternalMcpCatalogServerType = z.infer<
   typeof InternalMcpCatalogServerTypeSchema
+>;
+
+export type CatalogItemApprovalStatus = z.infer<
+  typeof CatalogItemApprovalStatusSchema
 >;
 
 export type AuthField = z.infer<typeof AuthFieldSchema>;

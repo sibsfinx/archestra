@@ -10,6 +10,7 @@ import {
   TOOL_APP_DATA_SET_SHORT_NAME,
   TOOL_DELETE_APP_SHORT_NAME,
   TOOL_EDIT_APP_SHORT_NAME,
+  TOOL_EDIT_MCP_CONFIG_SHORT_NAME,
   TOOL_GET_APP_DIAGNOSTICS_SHORT_NAME,
   TOOL_LIST_APPS_SHORT_NAME,
   TOOL_PREVIEW_APP_TOOL_SHORT_NAME,
@@ -18,6 +19,7 @@ import {
   TOOL_REFINE_APP_SHORT_NAME,
   TOOL_RENDER_APP_SHORT_NAME,
   TOOL_SCAFFOLD_APP_SHORT_NAME,
+  TOOL_SET_APP_TOOLS_SHORT_NAME,
   TOOL_VALIDATE_APP_SHORT_NAME,
 } from "@archestra/shared";
 import { vi } from "vitest";
@@ -28,12 +30,15 @@ import {
 } from "@/clients/chat-mcp-elicitation";
 import config from "@/config";
 import {
+  AppAccessModel,
   AppModel,
   AppRenderDiagnosticsModel,
   AppRenderScreenshotModel,
-  AppTeamModel,
   AppToolModel,
   AppVersionModel,
+  EnvironmentModel,
+  InternalMcpCatalogModel,
+  McpServerModel,
 } from "@/models";
 import { buildValidatedVersionPayload } from "@/services/apps/app-ui-policy";
 import {
@@ -111,8 +116,9 @@ describe("app tool execution", () => {
     expect(created.isError).toBe(false);
     const appId = structured(created).id as string;
     expect(structured(created).latestVersion).toBe(1);
-    // The model hands this link to the user; the chat UI renders inline from
-    // structuredContent.id (scaffold is in the rendering set).
+    // The model hands this link to the user. The scaffolded template is not
+    // rendered inline (only the first edit_app is); the standalone page stays
+    // reachable via the returned /a/<id> link.
     expect(structured(created).id).toMatch(/^[0-9a-f-]{36}$/);
     expect((created.content[0] as any).text).toContain(`/a/${appId}`);
 
@@ -151,6 +157,59 @@ describe("app tool execution", () => {
     );
     expect(deleted.isError).toBe(false);
     expect(await AppModel.findById(appId)).toBeNull();
+  });
+
+  test("delete_app tears down the app's backing catalog and server", async () => {
+    const created = await scaffold({ name: "BackingTeardown" });
+    const appId = structured(created).id as string;
+    const serverId = (await AppModel.findById(appId))?.mcpServerId;
+    expect(serverId).toBeTruthy();
+    const catalogId = (await McpServerModel.findById(serverId as string))
+      ?.catalogId;
+    expect(catalogId).toBeTruthy();
+
+    const deleted = await executeArchestraTool(
+      getArchestraToolFullName(TOOL_DELETE_APP_SHORT_NAME),
+      { appId },
+      context,
+    );
+    expect(deleted.isError).toBe(false);
+
+    // The MCP delete_app path must tear down backing too (not just the app row),
+    // or the catalog's name-uniqueness index stays occupied and the launch tool
+    // lingers in gateways.
+    expect(await AppModel.findById(appId)).toBeNull();
+    expect(await McpServerModel.findById(serverId as string)).toBeNull();
+    expect(
+      await InternalMcpCatalogModel.findById(catalogId as string),
+    ).toBeNull();
+  });
+
+  test("edit_mcp_config refuses to reconfigure an app's backing catalog", async () => {
+    // An app author has modify rights on their own backing catalog; without the
+    // serverType:"app" guard they could flip it to a deployable local server and
+    // attach a command, escaping the Apps lifecycle and registry controls.
+    const created = await scaffold({ name: "Hijackable" });
+    const appId = structured(created).id as string;
+    const serverId = (await AppModel.findById(appId))?.mcpServerId;
+    const catalogId = (await McpServerModel.findById(serverId as string))
+      ?.catalogId;
+    expect(catalogId).toBeTruthy();
+
+    const attempt = await executeArchestraTool(
+      getArchestraToolFullName(TOOL_EDIT_MCP_CONFIG_SHORT_NAME),
+      { id: catalogId, serverType: "local", command: "evil-binary" },
+      context,
+    );
+    expect(attempt.isError).toBe(true);
+    expect((attempt.content[0] as any).text).toContain(
+      "managed through the Apps API",
+    );
+
+    // The catalog is untouched: still an app, no deploy config attached.
+    const after = await InternalMcpCatalogModel.findById(catalogId as string);
+    expect(after?.serverType).toBe("app");
+    expect(after?.localConfig).toBeFalsy();
   });
 
   test("a plain member cannot create or mutate org-scoped apps", async ({
@@ -230,18 +289,30 @@ describe("app tool execution", () => {
     expect(head?.uiPermissions).toEqual({ camera: {} });
   });
 
-  test("scaffold seeds the default template and returns its HTML", async () => {
+  test("scaffold seeds the default template with the app name and returns its HTML", async () => {
     const created = await scaffold({ name: "From Template" });
     expect(created.isError).toBe(false);
     const appId = structured(created).id as string;
 
     const head = await AppVersionModel.findByAppAndVersion(appId, 1);
-    expect(head?.html).toContain("window.archestra.storage.user.set");
+    expect(head?.html).toContain("<h1>From Template</h1>");
+    expect(head?.html).not.toContain("{{APP_NAME}}");
     // Scaffold-then-edit: the seeded html rides the result text so the model
     // can edit_app without a read-back.
     expect((created.content[0] as any).text).toContain(
-      "window.archestra.storage.user.set",
+      "<h1>From Template</h1>",
     );
+  });
+
+  test("scaffold result carries the condensed window.archestra SDK surface", async () => {
+    const created = await scaffold({ name: "Counter" });
+    expect(created.isError).toBe(false);
+    // The create flow's first edit_app has the SDK contract — and the storage
+    // return shapes — in context without loading the full skill.
+    const text = (created.content[0] as any).text as string;
+    expect(text).toContain("archestra.storage.user.{get,set,list,delete}");
+    expect(text).toContain("{value, revision, owner}");
+    expect(text).toContain("Build App");
   });
 
   test("edit rejects SDK self-bootstrap html and surfaces fragment warnings", async () => {
@@ -289,7 +360,9 @@ describe("app tool execution", () => {
     await scaffold({ name: "Dup", scope: "org" });
     const second = await scaffold({ name: "Dup", scope: "org" });
     expect(second.isError).toBe(true);
-    expect((second.content[0] as any).text).toContain("already exists");
+    expect((second.content[0] as any).text).toContain(
+      "already have an app named",
+    );
   });
 
   test("scaffold rejects team scope", async () => {
@@ -381,6 +454,20 @@ describe("read_app / edit_app", () => {
 
     const pinned = await readApp(appId, version);
     expect(structured(pinned).html).toBe("<h1>v1</h1>");
+  });
+
+  test("read_app result carries the condensed window.archestra SDK surface", async () => {
+    const { appId } = await scaffoldWithHtml("<h1>v1</h1>");
+    const head = await readApp(appId);
+    const text = (head.content[0] as any).text as string;
+    // The contract rides the result the model always reads before edit_app, so
+    // it authors against the real storage API (the right namespace AND the
+    // {value, revision, owner} return shape) without loading the full skill.
+    expect(text).toContain("archestra.storage.user.{get,set,list,delete}");
+    expect(text).toContain("{value, revision, owner}");
+    // Escalation pointer: names what the summary omits so the model knows when
+    // to load the full Build App skill.
+    expect(text).toContain("Build App");
   });
 
   test("read_app errors on a missing app or version", async () => {
@@ -515,6 +602,21 @@ describe("read_app / edit_app", () => {
     expect((await AppModel.findById(appId))?.latestVersion).toBe(version);
   });
 
+  test("a self-overlapping old_str is rejected as ambiguous, not silently replaced", async () => {
+    // "aa" matches at indices 5 and 6 in "aaa" (overlapping). The uniqueness
+    // guard must see both and reject, never collapse to one and edit the first.
+    const { appId, version } = await scaffoldWithHtml("<pre>aaa</pre>");
+    const result = await editApp(appId, version, [
+      { old_str: "aa", new_str: "bb" },
+    ]);
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as any).text).toContain("matched 2 times");
+    expect((await AppModel.findById(appId))?.latestVersion).toBe(version);
+    expect(
+      (await AppVersionModel.findByAppAndVersion(appId, version))?.html,
+    ).toBe("<pre>aaa</pre>");
+  });
+
   test("a no-op edit (old_str === new_str) is rejected", async () => {
     const { appId, version } = await scaffoldWithHtml("<h1>same</h1>");
     const result = await editApp(appId, version, [
@@ -549,6 +651,133 @@ describe("read_app / edit_app", () => {
     expect(result.isError).toBe(true);
     expect((result.content[0] as any).text).toContain("byte limit");
     expect((await AppModel.findById(appId))?.latestVersion).toBe(version);
+  });
+
+  test("a 0-match edit whose old_str differs only in whitespace returns the exact current text", async () => {
+    // The stored html has a triple space; the model's old_str has one. Exact
+    // match fails, but the recovery hint hands back the real current span.
+    const { appId, version } = await scaffoldWithHtml(
+      "<html><head></head><body><p>Hello   World</p></body></html>",
+    );
+    const result = await editApp(appId, version, [
+      { old_str: "Hello World", new_str: "Hi" },
+    ]);
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as any).text as string;
+    expect(text).toContain("0 matches");
+    // ground truth surfaced inline, so the model can copy it verbatim
+    expect(text).toContain("Hello   World");
+    expect((await AppModel.findById(appId))?.latestVersion).toBe(version);
+  });
+
+  test("a whitespace near-miss at the very end of the document recovers the full span", async () => {
+    // Exercises the end-boundary fallback (afterIdx === text length -> uses
+    // haystack.length). The matched span is the last thing in the document.
+    const { appId, version } = await scaffoldWithHtml(
+      "<html><head></head><body></body></html>\n\n<!-- TAIL    MARKER -->",
+    );
+    const result = await editApp(appId, version, [
+      { old_str: "TAIL MARKER", new_str: "x" },
+    ]);
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as any).text).toContain("TAIL    MARKER");
+  });
+
+  test("a whitespace-only old_str with no near-miss falls back to read_app guidance", async () => {
+    const { appId, version } = await scaffoldWithHtml(
+      "<html><head></head><body>nogapshere</body></html>",
+    );
+    // "\t" matches nothing exactly and normalizes to empty, so no hint applies.
+    const result = await editApp(appId, version, [
+      { old_str: "\t", new_str: "x" },
+    ]);
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as any).text as string;
+    expect(text).toContain("0 matches");
+    expect(text).toContain("read_app");
+  });
+
+  test("a 0-match edit with a one-char drift surfaces the current text via a unique anchor", async () => {
+    const { appId, version } = await scaffoldWithHtml(
+      [
+        "<html><head><title>Dash</title></head><body>",
+        '<div class="metrics-container-unique-anchor">',
+        "<span>42</span>",
+        "</div>",
+        "</body></html>",
+      ].join("\n"),
+    );
+    // old_str reconstructs the block from memory with 42 -> 43 on the span line.
+    const result = await editApp(appId, version, [
+      {
+        old_str:
+          '<div class="metrics-container-unique-anchor">\n<span>43</span>',
+        new_str: "<span>99</span>",
+      },
+    ]);
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as any).text as string;
+    expect(text).toContain("0 matches");
+    // the window around the unique anchor shows the real current value (42)
+    expect(text).toContain("<span>42</span>");
+    expect((await AppModel.findById(appId))?.latestVersion).toBe(version);
+  });
+
+  test("a partial edit that strips the document root is rejected atomically", async () => {
+    const { appId, version } = await scaffoldWithHtml(
+      "<html><head></head><body><main>keep</main></body></html>",
+    );
+    const result = await editApp(appId, version, [
+      { old_str: "<html><head></head><body>", new_str: "" },
+    ]);
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as any).text).toContain("document root");
+    // nothing saved: still the same head version with its html
+    expect((await AppModel.findById(appId))?.latestVersion).toBe(version);
+    expect(
+      (await AppVersionModel.findByAppAndVersion(appId, version))?.html,
+    ).toBe("<html><head></head><body><main>keep</main></body></html>");
+  });
+
+  test("a multi-edit array that together strips the document root is rejected atomically", async () => {
+    const html = "<html><head></head><body><main>keep</main></body></html>";
+    const { appId, version } = await scaffoldWithHtml(html);
+    // Two edits (so it is not a whole-document replacement) that between them
+    // remove the <html> and <head> roots.
+    const result = await editApp(appId, version, [
+      { old_str: "<html>", new_str: "" },
+      { old_str: "<head></head>", new_str: "" },
+    ]);
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as any).text).toContain("document root");
+    expect((await AppModel.findById(appId))?.latestVersion).toBe(version);
+    expect(
+      (await AppVersionModel.findByAppAndVersion(appId, version))?.html,
+    ).toBe(html);
+  });
+
+  test("a whole-document rewrite to a fragment is allowed", async () => {
+    const html = "<html><head></head><body><p>full</p></body></html>";
+    const { appId, version } = await scaffoldWithHtml(html);
+    // single edit replacing the entire document — the deliberate "full rewrite"
+    const result = await editApp(appId, version, [
+      { old_str: html, new_str: "<p>just a fragment</p>" },
+    ]);
+    expect(result.isError).toBe(false);
+    expect(
+      (await AppVersionModel.findByAppAndVersion(appId, version + 1))?.html,
+    ).toBe("<p>just a fragment</p>");
+  });
+
+  test("a partial edit on an app that was already a fragment is unaffected", async () => {
+    const { appId, version } = await scaffoldWithHtml("<p>frag</p>");
+    const result = await editApp(appId, version, [
+      { old_str: "frag", new_str: "fragment" },
+    ]);
+    expect(result.isError).toBe(false);
+    expect(
+      (await AppVersionModel.findByAppAndVersion(appId, version + 1))?.html,
+    ).toBe("<p>fragment</p>");
   });
 
   test("edits that net back to the head create no new version and say so", async () => {
@@ -1045,6 +1274,157 @@ describe("scaffold_app tools param", () => {
   });
 });
 
+describe("set_app_tools", () => {
+  let context: ArchestraContext;
+  let organizationId: string;
+  let userId: string;
+  let toolName: string;
+
+  beforeEach(
+    async ({
+      makeAgent,
+      makeUser,
+      makeMember,
+      makeInternalMcpCatalog,
+      makeTool,
+    }) => {
+      const agent = await makeAgent({ name: "Set Tools Agent" });
+      organizationId = agent.organizationId;
+      const user = await makeUser();
+      userId = user.id;
+      await makeMember(user.id, organizationId, { role: ADMIN_ROLE_NAME });
+      context = {
+        agent: { id: agent.id, name: agent.name },
+        organizationId,
+        userId: user.id,
+      };
+
+      const catalog = await makeInternalMcpCatalog({ organizationId });
+      toolName = `acme__search_${crypto.randomUUID().slice(0, 8)}`;
+      await makeTool({ name: toolName, catalogId: catalog.id });
+    },
+  );
+
+  function scaffold(args: Record<string, unknown>) {
+    return executeArchestraTool(
+      getArchestraToolFullName(TOOL_SCAFFOLD_APP_SHORT_NAME),
+      args,
+      context,
+    );
+  }
+
+  function setTools(args: Record<string, unknown>, ctx = context) {
+    return executeArchestraTool(
+      getArchestraToolFullName(TOOL_SET_APP_TOOLS_SHORT_NAME),
+      args,
+      ctx,
+    );
+  }
+
+  test("assigns a tool to an app scaffolded without any", async () => {
+    const created = await scaffold({ name: "Recoverable" });
+    const appId = structured(created).id as string;
+    expect(await AppToolModel.getToolsForApp(appId)).toEqual([]);
+
+    const res = await setTools({ appId, tools: [toolName] });
+    expect(res.isError).toBe(false);
+    expect(structured(res).tools).toEqual([toolName]);
+    const assigned = await AppToolModel.getToolsForApp(appId);
+    expect(assigned.map((tool) => tool.name)).toEqual([toolName]);
+  });
+
+  test("an unknown tool name fails and leaves the prior set intact", async () => {
+    const created = await scaffold({ name: "Keeper", tools: [toolName] });
+    const appId = structured(created).id as string;
+
+    const res = await setTools({ appId, tools: ["nope__missing"] });
+    expect(res.isError).toBe(true);
+    expect((res.content[0] as any).text).toContain("nope__missing");
+    const assigned = await AppToolModel.getToolsForApp(appId);
+    expect(assigned.map((tool) => tool.name)).toEqual([toolName]);
+  });
+
+  test("an empty list clears the assigned set", async () => {
+    const created = await scaffold({ name: "Clearable", tools: [toolName] });
+    const appId = structured(created).id as string;
+
+    const res = await setTools({ appId, tools: [] });
+    expect(res.isError).toBe(false);
+    expect(structured(res).tools).toEqual([]);
+    expect(await AppToolModel.getToolsForApp(appId)).toEqual([]);
+  });
+
+  test("resolves tools in the app's bound environment, not the org default", async ({
+    makeInternalMcpCatalog,
+    makeTool,
+    makeApp,
+  }) => {
+    const env = await EnvironmentModel.create({
+      organizationId,
+      name: `Env ${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const envCatalog = await makeInternalMcpCatalog({
+      organizationId,
+      environmentId: env.id,
+    });
+    const envToolName = `acme__env_${crypto.randomUUID().slice(0, 8)}`;
+    await makeTool({ name: envToolName, catalogId: envCatalog.id });
+
+    const app = await makeApp({
+      organizationId,
+      scope: "personal",
+      authorId: userId,
+      environmentId: env.id,
+    });
+
+    // Succeeds only because resolution fences on app.environmentId (env), not the
+    // org default (null) scaffold_app uses — a default-env resolve would reject it.
+    const res = await setTools({ appId: app.id, tools: [envToolName] });
+    expect(res.isError).toBe(false);
+    expect(structured(res).tools).toEqual([envToolName]);
+  });
+
+  test("rejects a default-env tool for an env-bound app, leaving it unchanged", async ({
+    makeApp,
+  }) => {
+    // toolName (beforeEach) lives in the org-default environment (null); the app
+    // is bound to a non-default environment — the counterfactual of the test
+    // above. A resolve against the org default would wrongly accept it.
+    const env = await EnvironmentModel.create({
+      organizationId,
+      name: `Env ${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const app = await makeApp({
+      organizationId,
+      scope: "personal",
+      authorId: userId,
+      environmentId: env.id,
+    });
+
+    const res = await setTools({ appId: app.id, tools: [toolName] });
+    expect(res.isError).toBe(true);
+    expect((res.content[0] as any).text).toContain("Unknown tool name");
+    expect(await AppToolModel.getToolsForApp(app.id)).toEqual([]);
+  });
+
+  test("a member who cannot modify the app is refused, leaving it unchanged", async ({
+    makeUser,
+    makeMember,
+  }) => {
+    const created = await scaffold({ name: "OrgApp", scope: "org" });
+    const appId = structured(created).id as string;
+    const member = await makeUser();
+    await makeMember(member.id, organizationId, { role: "member" });
+
+    const res = await setTools(
+      { appId, tools: [toolName] },
+      { ...context, userId: member.id },
+    );
+    expect(res.isError).toBe(true);
+    expect(await AppToolModel.getToolsForApp(appId)).toEqual([]);
+  });
+});
+
 describe("refine_app", () => {
   let context: ArchestraContext;
   let organizationId: string;
@@ -1466,7 +1846,7 @@ describe("publish_app", () => {
     );
     expect(result.isError).toBe(false);
     expect(structured(result).scope).toBe("team");
-    expect(await AppTeamModel.getTeamsForApp(app.id)).toEqual([team.id]);
+    expect(await AppAccessModel.getTeamsForApp(app.id)).toEqual([team.id]);
   });
 
   // The source-scope gate: a team admin (editor) can see every org app but must
@@ -1499,7 +1879,7 @@ describe("publish_app", () => {
     expect(result.isError).toBe(true);
     // the org app is untouched — neither demoted nor reassigned
     expect((await AppModel.findById(app.id))?.scope).toBe("org");
-    expect(await AppTeamModel.getTeamsForApp(app.id)).toEqual([]);
+    expect(await AppAccessModel.getTeamsForApp(app.id)).toEqual([]);
   });
 
   test("rejects teamIds when publishing to org scope", async ({

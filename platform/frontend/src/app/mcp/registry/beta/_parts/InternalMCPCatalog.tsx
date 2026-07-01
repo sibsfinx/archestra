@@ -95,7 +95,9 @@ export function InternalMCPCatalog({
   // Get search query from URL
   const searchQueryFromUrl = searchParams.get("search") || "";
 
-  const { data: catalogItems } = useInternalMcpCatalog({ initialData });
+  const { data: catalogItems } = useInternalMcpCatalog({
+    initialData,
+  });
   const { data: installedServers } = useMcpServers({
     initialData: initialInstalledServers,
   });

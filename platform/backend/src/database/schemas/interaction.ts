@@ -4,6 +4,7 @@ import type {
 } from "@archestra/shared";
 import {
   type AnyPgColumn,
+  boolean,
   index,
   integer,
   jsonb,
@@ -55,6 +56,16 @@ const interactionsTable = pgTable(
       onDelete: "set null",
     }),
     virtualKeyId: uuid("virtual_key_id").references(
+      () => virtualApiKeysTable.id,
+      { onDelete: "set null" },
+    ),
+    /**
+     * Optional passthrough virtual key (X-Archestra-Virtual-Key header) that
+     * authenticated the acting user for this request. Tracked independently from
+     * `virtualKeyId`: a request may carry a standard virtual key as its provider
+     * credential AND a passthrough key as the user identity.
+     */
+    passthroughVirtualKeyId: uuid("passthrough_virtual_key_id").references(
       () => virtualApiKeysTable.id,
       { onDelete: "set null" },
     ),
@@ -150,6 +161,9 @@ const interactionsTable = pgTable(
      */
     baselineModel: varchar("baseline_model"),
     inputTokens: integer("input_tokens"),
+    inputTokensEstimated: boolean("input_tokens_estimated")
+      .notNull()
+      .default(false),
     outputTokens: integer("output_tokens"),
     cacheReadTokens: integer("cache_read_tokens"),
     cacheWriteTokens: integer("cache_write_tokens"),
