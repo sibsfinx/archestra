@@ -4,8 +4,8 @@ import { AgentsPage } from "./pages/agents-page";
 import { LlmLogsPage } from "./pages/llm-logs-page";
 import { LlmProviderApiKeysPage } from "./pages/llm-provider-api-keys-page";
 import { MailSettingsPage } from "./pages/mail-settings-page";
-import { OnboardingMailPage } from "./pages/onboarding-mail-page";
 import { McpRegistryPage } from "./pages/mcp-registry-page";
+import { OnboardingMailPage } from "./pages/onboarding-mail-page";
 import { SkillsNewPage } from "./pages/skills-new-page";
 import { VirtualKeysPage } from "./pages/virtual-keys-page";
 

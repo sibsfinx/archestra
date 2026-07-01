@@ -1,6 +1,6 @@
 import type { TransactionalEmail } from "./types";
 
-export type CapturedEmail = TransactionalEmail & {
+type CapturedEmail = TransactionalEmail & {
   capturedAt: Date;
 };
 

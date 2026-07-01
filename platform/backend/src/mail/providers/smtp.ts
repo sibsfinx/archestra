@@ -1,8 +1,8 @@
 import type { TransactionalEmail } from "../types";
 
-export type SmtpTlsMode = "none" | "starttls" | "tls";
+type SmtpTlsMode = "none" | "starttls" | "tls";
 
-export type SmtpConfig = {
+type SmtpConfig = {
   host: string;
   port: number;
   tlsMode: SmtpTlsMode;

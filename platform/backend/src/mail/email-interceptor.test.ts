@@ -17,8 +17,12 @@ describe("emailInterceptor", () => {
       subject: "Hello",
       text: "Body",
     });
-    expect(emailInterceptor.findByRecipient("user@example.com")).toHaveLength(1);
-    expect(emailInterceptor.findByRecipient("other@example.com")).toHaveLength(0);
+    expect(emailInterceptor.findByRecipient("user@example.com")).toHaveLength(
+      1,
+    );
+    expect(emailInterceptor.findByRecipient("other@example.com")).toHaveLength(
+      0,
+    );
   });
 
   test("extracts reset URLs from plain-text bodies", () => {

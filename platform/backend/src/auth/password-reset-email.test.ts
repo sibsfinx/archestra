@@ -67,7 +67,10 @@ describe("sendPasswordResetEmail with email interceptor", () => {
     });
     expect(captured?.text).toContain(resetUrl);
     expect(captured?.html).toContain(resetUrl);
-    expect(emailInterceptor.extractUrl(captured!)).toBe(resetUrl);
+    if (!captured) {
+      throw new Error("expected captured email");
+    }
+    expect(emailInterceptor.extractUrl(captured)).toBe(resetUrl);
   });
 
   test("finds captured email by recipient", async () => {

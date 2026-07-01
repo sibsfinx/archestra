@@ -7,10 +7,10 @@ import {
   isEncryptedSecret,
 } from "@/utils/crypto";
 
-export type MailTlsMode = "none" | "starttls" | "tls";
-export type StoredMailProvider = "log" | "smtp";
+type MailTlsMode = "none" | "starttls" | "tls";
+type StoredMailProvider = "log" | "smtp";
 
-export type MailSettingsRecord = {
+type MailSettingsRecord = {
   id: string;
   organizationId: string;
   provider: StoredMailProvider;
@@ -27,7 +27,7 @@ export type MailSettingsRecord = {
   updatedAt: Date;
 };
 
-export type MailSettingsPublic = {
+type MailSettingsPublic = {
   provider: StoredMailProvider;
   fromAddress: string | null;
   fromName: string | null;
@@ -43,13 +43,13 @@ export type MailSettingsPublic = {
   overriddenByEnv: boolean;
 };
 
-export type MailStatus = {
+type MailStatus = {
   configured: boolean;
   verified: boolean;
   overriddenByEnv: boolean;
 };
 
-export type UpsertMailSettingsInput =
+type UpsertMailSettingsInput =
   | {
       provider: "smtp";
       fromAddress: string;
@@ -102,9 +102,7 @@ function serializeEncryptedField(value: string | null): string | null {
 }
 
 class MailSettingsModel {
-  static async getForOrg(
-    organizationId: string,
-  ): Promise<
+  static async getForOrg(organizationId: string): Promise<
     | (MailSettingsRecord & {
         smtp: DecryptedSmtpSecrets | null;
       })
@@ -263,7 +261,9 @@ class MailSettingsModel {
       });
     }
 
-    const { isMailOverriddenByEnv } = await import("@/mail/resolve-mail-config");
+    const { isMailOverriddenByEnv } = await import(
+      "@/mail/resolve-mail-config"
+    );
     return MailSettingsModel.getPublicForOrg(
       organizationId,
       isMailOverriddenByEnv(),

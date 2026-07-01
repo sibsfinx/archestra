@@ -15,8 +15,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { MailDraftState, MailProvider } from "@/lib/mail-settings-form";
 import type { MailSettings, MailTlsMode } from "@/lib/mail-settings.query";
+import type { MailDraftState, MailProvider } from "@/lib/mail-settings-form";
 
 type MailSetupFormProps = {
   settings: MailSettings;
@@ -31,7 +31,9 @@ type MailSetupFormProps = {
   testRecipient?: string | null;
   setTestRecipient?: (value: string | null) => void;
   showTestRecipient?: boolean;
-  setShowTestRecipient?: (value: boolean | ((prev: boolean) => boolean)) => void;
+  setShowTestRecipient?: (
+    value: boolean | ((prev: boolean) => boolean),
+  ) => void;
   onTest?: () => void;
   testDisabled?: boolean;
   isTesting?: boolean;
@@ -58,6 +60,11 @@ export function MailSetupForm({
   hasChanges = false,
 }: MailSetupFormProps) {
   const fieldId = (name: string) => `${idPrefix}${name}`;
+  const effectiveTestRecipient = (
+    testRecipient ??
+    defaultRecipient ??
+    ""
+  ).trim();
 
   return (
     <div className="space-y-4">
@@ -89,10 +96,7 @@ export function MailSetupForm({
                 htmlFor={fieldId("mail-provider-log")}
                 className="flex items-start gap-3 rounded-lg border p-4 cursor-pointer"
               >
-                <RadioGroupItem
-                  value="log"
-                  id={fieldId("mail-provider-log")}
-                />
+                <RadioGroupItem value="log" id={fieldId("mail-provider-log")} />
                 <div>
                   <p className="font-medium">Log (development)</p>
                   <p className="text-sm text-muted-foreground">
@@ -232,63 +236,65 @@ export function MailSetupForm({
         </CardContent>
       </Card>
 
-      {showTestSection && onTest && setShowTestRecipient && setTestRecipient && (
-        <Card>
-          <SettingsCardHeader
-            title="Test email"
-            description="Send a test using saved settings. Save changes before testing."
-          />
-          <CardContent className="pt-6 border-t space-y-3">
-            {showTestRecipient ? (
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                <div className="flex-1 space-y-2">
-                  <Label htmlFor={fieldId("test-recipient")}>Recipient</Label>
-                  <Input
-                    id={fieldId("test-recipient")}
-                    type="email"
-                    value={testRecipient ?? defaultRecipient}
-                    onChange={(e) => setTestRecipient(e.target.value)}
-                  />
+      {showTestSection &&
+        onTest &&
+        setShowTestRecipient &&
+        setTestRecipient && (
+          <Card>
+            <SettingsCardHeader
+              title="Test email"
+              description="Send a test using saved settings. Save changes before testing."
+            />
+            <CardContent className="pt-6 border-t space-y-3">
+              {showTestRecipient ? (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <div className="flex-1 space-y-2">
+                    <Label htmlFor={fieldId("test-recipient")}>Recipient</Label>
+                    <Input
+                      id={fieldId("test-recipient")}
+                      type="email"
+                      value={testRecipient ?? defaultRecipient}
+                      onChange={(e) => setTestRecipient(e.target.value)}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowTestRecipient(false)}
+                  >
+                    Use default
+                  </Button>
                 </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Send to {effectiveTestRecipient || "your account email"}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  data-testid={E2eTestId.MailSettingsTestEmailButton}
+                  onClick={onTest}
+                  disabled={testDisabled || !effectiveTestRecipient}
+                >
+                  {isTesting ? "Sending..." : "Send test email"}
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setShowTestRecipient(false)}
+                  onClick={() => setShowTestRecipient((v) => !v)}
                 >
-                  Use default
+                  Change recipient
                 </Button>
               </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Send to{" "}
-                {testRecipient ?? defaultRecipient ?? "your account email"}
-              </p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                data-testid={E2eTestId.MailSettingsTestEmailButton}
-                onClick={onTest}
-                disabled={testDisabled || !defaultRecipient}
-              >
-                {isTesting ? "Sending..." : "Send test email"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setShowTestRecipient((v) => !v)}
-              >
-                Change recipient
-              </Button>
-            </div>
-            {hasChanges && (
-              <p className="text-sm text-muted-foreground">
-                Save your settings before sending a test email.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      )}
+              {hasChanges && (
+                <p className="text-sm text-muted-foreground">
+                  Save your settings before sending a test email.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
     </div>
   );
 }

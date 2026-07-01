@@ -95,7 +95,9 @@ function RuntimeDialog({
       type: "page" as const,
       page,
     }));
-    return showMailSetup ? [{ type: "mail" as const }, ...pageSteps] : pageSteps;
+    return showMailSetup
+      ? [{ type: "mail" as const }, ...pageSteps]
+      : pageSteps;
   }, [showMailSetup, wizard.pages]);
   const pageCount = steps.length;
 

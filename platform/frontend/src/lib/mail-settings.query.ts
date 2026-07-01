@@ -103,7 +103,7 @@ export function useMailStatus(
       });
       if (error) {
         return {
-          configured: true,
+          configured: false,
           verified: false,
           overriddenByEnv: false,
         } satisfies MailStatus;
@@ -156,7 +156,9 @@ export function useTestMailSettings() {
     onSuccess: (result) => {
       if (!result) return;
       if (result.success) {
-        queryClient.invalidateQueries({ queryKey: mailSettingsKeys.settings() });
+        queryClient.invalidateQueries({
+          queryKey: mailSettingsKeys.settings(),
+        });
         queryClient.invalidateQueries({ queryKey: mailSettingsKeys.status() });
         toast.success("Test email sent");
       } else {

@@ -2,16 +2,16 @@
 
 import { useCallback, useMemo, useState } from "react";
 import {
+  type MailSettings,
+  useTestMailSettings,
+  useUpdateMailSettings,
+} from "@/lib/mail-settings.query";
+import {
   canSaveDraft,
   draftToUpdateBody,
   type MailDraftState,
   settingsToDraft,
 } from "@/lib/mail-settings-form";
-import {
-  type MailSettings,
-  useTestMailSettings,
-  useUpdateMailSettings,
-} from "@/lib/mail-settings.query";
 
 type UseMailSettingsDraftOptions = {
   settings: MailSettings;

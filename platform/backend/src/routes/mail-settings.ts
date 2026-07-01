@@ -1,11 +1,11 @@
 import { RouteId } from "@archestra/shared";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
-import { sendTransactionalEmail } from "@/mail/send-transactional";
 import {
   isMailOverriddenByEnv,
   resolveMailConfig,
 } from "@/mail/resolve-mail-config";
+import { sendTransactionalEmail } from "@/mail/send-transactional";
 import MailSettingsModel from "@/models/mail-settings";
 import { ApiError, constructResponseSchema } from "@/types";
 
@@ -77,7 +77,8 @@ const routes: FastifyPluginAsyncZod = async (app) => {
     {
       schema: {
         operationId: RouteId.UpdateMailSettings,
-        description: "Update outbound mail settings for the current organization",
+        description:
+          "Update outbound mail settings for the current organization",
         tags: ["Mail"],
         body: putMailSettingsSchema,
         response: constructResponseSchema(mailSettingsResponseSchema),
@@ -175,7 +176,10 @@ const routes: FastifyPluginAsyncZod = async (app) => {
       } catch (error) {
         return reply.send({
           success: false,
-          error: error instanceof Error ? error.message : "Failed to send test email",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to send test email",
           durationMs: Date.now() - startedAt,
         });
       }

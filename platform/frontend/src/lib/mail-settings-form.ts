@@ -97,7 +97,8 @@ export function draftToUpdateBody(
 
 export function isMailSettingsConfigured(settings: MailSettings): boolean {
   if (settings.overriddenByEnv) return true;
-  if (settings.provider === "log" || !settings.fromAddress?.trim()) return false;
+  if (settings.provider === "log" || !settings.fromAddress?.trim())
+    return false;
   if (settings.provider === "smtp") {
     return Boolean(settings.smtp?.host?.trim());
   }

@@ -3,7 +3,7 @@ import { parseMailFrom } from "./parse-from";
 
 describe("parseMailFrom", () => {
   test("parses name and email", () => {
-    expect(parseMailFrom('Archestra <noreply@example.com>')).toEqual({
+    expect(parseMailFrom("Archestra <noreply@example.com>")).toEqual({
       name: "Archestra",
       email: "noreply@example.com",
     });

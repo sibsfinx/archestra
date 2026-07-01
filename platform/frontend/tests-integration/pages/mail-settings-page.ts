@@ -1,5 +1,5 @@
-import type { Locator, Page } from "@playwright/test";
 import { E2eTestId } from "@archestra/shared/e2e-test-ids";
+import type { Locator, Page } from "@playwright/test";
 
 export class MailSettingsPage {
   readonly page: Page;
@@ -12,7 +12,9 @@ export class MailSettingsPage {
     this.page = page;
     this.smtpProvider = page.getByTestId(E2eTestId.MailSettingsProviderSmtp);
     this.saveButton = page.getByRole("button", { name: "Save" });
-    this.testEmailButton = page.getByTestId(E2eTestId.MailSettingsTestEmailButton);
+    this.testEmailButton = page.getByTestId(
+      E2eTestId.MailSettingsTestEmailButton,
+    );
     this.envOverrideAlert = page.getByTestId(
       E2eTestId.MailSettingsEnvOverrideAlert,
     );

@@ -19,15 +19,15 @@ import {
   virtualKeysSeed,
 } from "./data/llm-keys";
 import {
-  appearanceSettingsSeed,
-  organizationSeed,
-  teamsSeed,
-} from "./data/organization";
-import {
   makeSmtpMailSettings,
   unconfiguredMailSettingsSeed,
   unconfiguredMailStatusSeed,
 } from "./data/mail-settings";
+import {
+  appearanceSettingsSeed,
+  organizationSeed,
+  teamsSeed,
+} from "./data/organization";
 import { installedServersSeed } from "./data/servers";
 import {
   activeShareLinkSeed,

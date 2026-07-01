@@ -121,7 +121,9 @@ export function ResetPasswordView() {
     <Card className="w-full">
       <CardHeader>
         <CardTitle className="text-xl">Reset password</CardTitle>
-        <CardDescription>Choose a new password for your account.</CardDescription>
+        <CardDescription>
+          Choose a new password for your account.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <Form {...form}>
@@ -163,9 +165,7 @@ export function ResetPasswordView() {
               )}
             />
             <Button type="submit" className="w-full" disabled={isPending}>
-              {isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
+              {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Update password
             </Button>
           </form>

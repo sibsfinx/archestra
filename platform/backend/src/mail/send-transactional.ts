@@ -1,9 +1,9 @@
 import config from "@/config";
 import logger from "@/logging";
-import { resolveMailConfig } from "./resolve-mail-config";
 import { sendViaCaptureProvider } from "./providers/capture";
 import { sendViaLogProvider } from "./providers/log";
 import { sendViaSmtpProvider } from "./providers/smtp";
+import { resolveMailConfig } from "./resolve-mail-config";
 import type { TransactionalEmail } from "./types";
 
 type SendTransactionalEmailOptions = {
@@ -26,7 +26,9 @@ export async function sendTransactionalEmail(
 
     if (mailConfig.provider === "capture") {
       if (config.production) {
-        throw new Error("ARCHESTRA_MAIL_PROVIDER=capture is not allowed in production");
+        throw new Error(
+          "ARCHESTRA_MAIL_PROVIDER=capture is not allowed in production",
+        );
       }
 
       await sendViaCaptureProvider(message);

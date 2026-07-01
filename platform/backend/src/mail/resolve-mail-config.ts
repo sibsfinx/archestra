@@ -4,7 +4,7 @@ import OrganizationModel from "@/models/organization";
 import { parseMailFrom } from "./parse-from";
 import type { MailProviderType } from "./types";
 
-export type ResolvedMailConfig = {
+type ResolvedMailConfig = {
   provider: MailProviderType;
   from: string;
   smtp: {
@@ -64,11 +64,11 @@ export async function resolveMailConfig(
 
   const from = hasEnvFromOverride()
     ? config.mail.from
-    : (dbSettings?.fromAddress
-        ? dbSettings.fromName
-          ? `${dbSettings.fromName} <${dbSettings.fromAddress}>`
-          : dbSettings.fromAddress
-        : config.mail.from);
+    : dbSettings?.fromAddress
+      ? dbSettings.fromName
+        ? `${dbSettings.fromName} <${dbSettings.fromAddress}>`
+        : dbSettings.fromAddress
+      : config.mail.from;
 
   const smtpFromDb = dbSettings?.smtp;
   const smtp =
@@ -95,9 +95,7 @@ export async function resolveMailConfig(
             config.mail.smtp.password ||
             undefined,
           fromAddress:
-            dbSettings?.fromAddress ||
-            parseMailFrom(from)?.email ||
-            from,
+            dbSettings?.fromAddress || parseMailFrom(from)?.email || from,
           fromName: dbSettings?.fromName || parseMailFrom(from)?.name,
           replyTo: dbSettings?.replyTo || undefined,
         }

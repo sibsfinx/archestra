@@ -14,8 +14,8 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import { useForm } from "react-hook-form";
+import { toast } from "sonner";
 import { z } from "zod";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -46,8 +46,8 @@ import {
   usePublicEnterpriseCoreActive,
 } from "@/lib/config/config.query";
 import { useAppName } from "@/lib/hooks/use-app-name";
-import { RecoverAccountView } from "./recover-account-view";
 import { ForgotPasswordView } from "./forgot-password-view";
+import { RecoverAccountView } from "./recover-account-view";
 import { ResetPasswordView } from "./reset-password-view";
 import { SignOutWithIdpLogout } from "./sign-out-with-idp-logout";
 import { TwoFactorView } from "./two-factor-view";
@@ -155,8 +155,7 @@ const ComponentState = {
 
 const FORGOT_PASSWORD_PATH = "/auth/forgot-password" as const;
 
-type ComponentStateValue =
-  (typeof ComponentState)[keyof typeof ComponentState];
+type ComponentStateValue = (typeof ComponentState)[keyof typeof ComponentState];
 
 interface AuthViewWithErrorHandlingProps {
   path: string;

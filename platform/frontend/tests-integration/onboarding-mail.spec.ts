@@ -1,12 +1,12 @@
 import { makeAgent } from "../src/mocks/data/agents";
 import { makeLlmProviderApiKey } from "../src/mocks/data/llm-keys";
-import { makeOrganization } from "../src/mocks/data/organization";
 import {
   makeConfiguredMailStatus,
   makeSmtpMailSettings,
   unconfiguredMailSettingsSeed,
   unconfiguredMailStatusSeed,
 } from "../src/mocks/data/mail-settings";
+import { makeOrganization } from "../src/mocks/data/organization";
 import { expect, test } from "./fixtures";
 import type { MswControl } from "./helpers/msw-control";
 
@@ -208,7 +208,9 @@ test.describe("Chat onboarding mail setup", () => {
 
     await expect(onboardingMailPage.mailStep).toBeVisible();
     await onboardingMailPage.nextButton.click();
-    await expect(page.getByText("Welcome to your workspace guide.")).toBeVisible();
+    await expect(
+      page.getByText("Welcome to your workspace guide."),
+    ).toBeVisible();
   });
 
   test("env override hides the mail setup wizard button", async ({

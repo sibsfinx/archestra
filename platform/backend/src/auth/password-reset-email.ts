@@ -1,6 +1,6 @@
 import { DEFAULT_APP_NAME } from "@archestra/shared";
-import MemberModel from "@/models/member";
 import { sendTransactionalEmail } from "@/mail/send-transactional";
+import MemberModel from "@/models/member";
 
 type PasswordResetEmailParams = {
   email: string;

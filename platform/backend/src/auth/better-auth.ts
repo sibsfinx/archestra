@@ -267,6 +267,11 @@ export const auth = betterAuth({
         email: user.email,
         url,
         userId: user.id,
+      }).catch((err) => {
+        logger.error(
+          { err, userId: user.id, email: user.email },
+          "[auth] failed to send password reset email",
+        );
       });
     },
   },
