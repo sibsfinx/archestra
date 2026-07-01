@@ -361,13 +361,14 @@ async function updatePersonalMemory(
   if (!args.id) {
     return errorResult("update requires id.");
   }
+  const memoryId = args.id;
 
   const content = args.content?.trim();
   if (!content) {
     return errorResult("update requires non-empty content.");
   }
 
-  const existing = await MemoryModel.getById(args.id);
+  const existing = await MemoryModel.getById(memoryId);
   if (
     !existing ||
     existing.organizationId !== ctx.organizationId ||
@@ -402,7 +403,7 @@ async function updatePersonalMemory(
                 eq(schema.memoriesTable.userId, ctx.userId),
                 eq(schema.memoriesTable.visibility, "personal"),
                 eq(schema.memoriesTable.content, content),
-                ne(schema.memoriesTable.id, args.id!),
+                ne(schema.memoriesTable.id, memoryId),
               ),
             )
             .limit(1);
@@ -415,7 +416,7 @@ async function updatePersonalMemory(
         const [row] = await tx
           .update(schema.memoriesTable)
           .set({ content, tier })
-          .where(eq(schema.memoriesTable.id, args.id!))
+          .where(eq(schema.memoriesTable.id, memoryId))
           .returning();
 
         if (!row) return { error: "Failed to update memory." };
@@ -479,8 +480,9 @@ async function deletePersonalMemory(
   if (!args.id) {
     return errorResult("delete requires id.");
   }
+  const memoryId = args.id;
 
-  const existing = await MemoryModel.getById(args.id);
+  const existing = await MemoryModel.getById(memoryId);
   if (
     !existing ||
     existing.organizationId !== ctx.organizationId ||
@@ -494,7 +496,7 @@ async function deletePersonalMemory(
   const deleted = await db.transaction(async (tx) => {
     const result = await tx
       .delete(schema.memoriesTable)
-      .where(eq(schema.memoriesTable.id, args.id!))
+      .where(eq(schema.memoriesTable.id, memoryId))
       .returning({ id: schema.memoriesTable.id });
 
     if (result.length === 0) return false;

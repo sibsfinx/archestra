@@ -2,7 +2,7 @@ import type { ResourceVisibilityScope } from "@/types/visibility";
 import { requireScopedModifyPermission } from "./agent-type-permissions";
 import { getPermissionsForUserContext } from "./utils";
 
-export interface MemoryPermissionChecker {
+interface MemoryPermissionChecker {
   canRead: boolean;
   isAdmin: boolean;
   isTeamAdmin: boolean;

@@ -70,16 +70,41 @@ describe("MCP backing for apps", () => {
     return response.json().id as string;
   }
 
+  async function getBackingServer(appId: string) {
+    const created = await AppModel.findById(appId);
+    const mcpServerId = created?.mcpServerId;
+    if (!mcpServerId) {
+      throw new Error("Expected app to have an MCP server id");
+    }
+
+    const server = await McpServerModel.findById(mcpServerId);
+    if (!server) {
+      throw new Error("Expected app MCP server to exist");
+    }
+
+    return server;
+  }
+
+  async function getBackingCatalogId(appId: string): Promise<string> {
+    const server = await getBackingServer(appId);
+    const catalogId = server.catalogId;
+    if (!catalogId) {
+      throw new Error("Expected app MCP server to have a catalog id");
+    }
+
+    return catalogId;
+  }
+
   test("creating an app provisions a serverType:'app' catalog, server, and open launch tool", async () => {
     const appId = await createApp();
 
-    const created = await AppModel.findById(appId);
-    expect(created?.mcpServerId).toBeTruthy();
-
-    const server = await McpServerModel.findById(created?.mcpServerId!);
+    const server = await getBackingServer(appId);
     expect(server?.serverType).toBe("app");
     expect(server?.catalogId).toBeTruthy();
-    const catalogId = server!.catalogId;
+    const catalogId = server?.catalogId;
+    if (!catalogId) {
+      throw new Error("Expected app MCP server to have a catalog id");
+    }
 
     const catalog = await InternalMcpCatalogModel.findById(catalogId);
     expect(catalog?.serverType).toBe("app");
@@ -114,10 +139,8 @@ describe("MCP backing for apps", () => {
       .then((r) => r.json().id as string);
 
     const nameFor = async (appId: string) => {
-      const a = await AppModel.findById(appId);
-      const s = await McpServerModel.findById(a?.mcpServerId!);
-      expect(s?.catalogId).toBeTruthy();
-      const [t] = await ToolModel.findByCatalogIdWithMeta(s!.catalogId);
+      const catalogId = await getBackingCatalogId(appId);
+      const [t] = await ToolModel.findByCatalogIdWithMeta(catalogId);
       return t.name;
     };
     const nameA = await nameFor(appAId);
@@ -144,10 +167,8 @@ describe("MCP backing for apps", () => {
       organizationId,
     });
     const nameFor = async (appId: string) => {
-      const a = await AppModel.findById(appId);
-      const s = await McpServerModel.findById(a?.mcpServerId!);
-      expect(s?.catalogId).toBeTruthy();
-      const [t] = await ToolModel.findByCatalogIdWithMeta(s!.catalogId);
+      const catalogId = await getBackingCatalogId(appId);
+      const [t] = await ToolModel.findByCatalogIdWithMeta(catalogId);
       return t.name;
     };
     const nameA = await nameFor(first.id);
@@ -159,8 +180,7 @@ describe("MCP backing for apps", () => {
 
   test("the app backing catalog is excluded from external UI-capable detection (no double-listing)", async () => {
     const appId = await createApp();
-    const created = await AppModel.findById(appId);
-    const backing = await McpServerModel.findById(created?.mcpServerId!);
+    const backing = await getBackingServer(appId);
 
     const uiCapable = await McpServerModel.findUiCapableForCaller({
       userId: user.id,
@@ -208,10 +228,7 @@ describe("MCP backing for apps", () => {
 
   test("an app's backing catalog cannot be hijacked via the generic catalog update", async () => {
     const appId = await createApp();
-    const created = await AppModel.findById(appId);
-    const server = await McpServerModel.findById(created?.mcpServerId!);
-    expect(server?.catalogId).toBeTruthy();
-    const catalogId = server!.catalogId;
+    const catalogId = await getBackingCatalogId(appId);
 
     const catalogApp = createFastifyInstance();
     catalogApp.addHook("onRequest", async (request) => {
@@ -240,10 +257,8 @@ describe("MCP backing for apps", () => {
 
   test("editing an app catalog's scope propagates to the app and backing server", async () => {
     const appId = await createApp("personal");
-    const created = await AppModel.findById(appId);
-    const server = await McpServerModel.findById(created?.mcpServerId!);
-    expect(server?.catalogId).toBeTruthy();
-    const catalogId = server!.catalogId;
+    const server = await getBackingServer(appId);
+    const catalogId = await getBackingCatalogId(appId);
 
     const catalogApp = createFastifyInstance();
     catalogApp.addHook("onRequest", async (request) => {
@@ -262,7 +277,7 @@ describe("MCP backing for apps", () => {
     });
     expect(res.statusCode).toBe(200);
 
-    expect((await McpServerModel.findById(server!.id))?.scope).toBe("org");
+    expect((await McpServerModel.findById(server.id))?.scope).toBe("org");
     expect((await AppModel.findById(appId))?.scope).toBe("org");
 
     await catalogApp.close();
@@ -270,11 +285,9 @@ describe("MCP backing for apps", () => {
 
   test("editing an app via REST PATCH propagates name + scope to the backing catalog", async () => {
     const appId = await createApp("personal");
-    const created = await AppModel.findById(appId);
-    const catalogId = (await McpServerModel.findById(created?.mcpServerId!))
-      ?.catalogId;
-    expect(catalogId).toBeTruthy();
-    const [toolBefore] = await ToolModel.findByCatalogIdWithMeta(catalogId!);
+    const server = await getBackingServer(appId);
+    const catalogId = await getBackingCatalogId(appId);
+    const [toolBefore] = await ToolModel.findByCatalogIdWithMeta(catalogId);
 
     const res = await app.inject({
       method: "PATCH",
@@ -283,26 +296,24 @@ describe("MCP backing for apps", () => {
     });
     expect(res.statusCode).toBe(200);
 
-    const catalog = await InternalMcpCatalogModel.findById(catalogId!);
+    const catalog = await InternalMcpCatalogModel.findById(catalogId);
     expect(catalog?.name).toBe("Renamed Dashboard");
     expect(catalog?.scope).toBe("org");
-    const renamedServer = await McpServerModel.findById(created?.mcpServerId!);
+    const renamedServer = await McpServerModel.findById(server.id);
     expect(renamedServer?.scope).toBe("org");
     expect(renamedServer?.name).toBe("Renamed Dashboard");
     // The launch tool name is id-suffixed (stable + globally unique), so a
     // rename does NOT re-slugify it — that can't reintroduce a dedupe collision.
-    const [toolAfter] = await ToolModel.findByCatalogIdWithMeta(catalogId!);
+    const [toolAfter] = await ToolModel.findByCatalogIdWithMeta(catalogId);
     expect(toolAfter.name).toBe(toolBefore.name);
     expect(toolAfter.name.endsWith("__open")).toBe(true);
   });
 
   test("deleting an app tears down its backing catalog and server", async () => {
     const appId = await createApp();
-    const created = await AppModel.findById(appId);
-    const mcpServerId = created?.mcpServerId!;
-    const server = await McpServerModel.findById(mcpServerId);
-    expect(server?.catalogId).toBeTruthy();
-    const catalogId = server!.catalogId;
+    const server = await getBackingServer(appId);
+    const mcpServerId = server.id;
+    const catalogId = await getBackingCatalogId(appId);
 
     const del = await app.inject({
       method: "DELETE",

@@ -12,10 +12,7 @@ import {
   requireMemoryModifyPermission,
 } from "@/auth/memory-permissions";
 import db, { schema } from "@/database";
-import {
-  assertMemoryEnabledForOrganization,
-  assertMemoryGloballyEnabled,
-} from "@/memory-feature";
+import { assertMemoryEnabledForOrganization } from "@/memory-feature";
 import { MemoryModel, TeamModel } from "@/models";
 import {
   ApiError,

@@ -2,17 +2,17 @@ import config from "@/config";
 import OrganizationModel from "@/models/organization";
 import { ApiError } from "@/types";
 
-export function isMemoryGloballyEnabled(): boolean {
+function isMemoryGloballyEnabled(): boolean {
   return config.memory.enabled;
 }
 
-export function assertMemoryGloballyEnabled(): void {
+function assertMemoryGloballyEnabled(): void {
   if (!isMemoryGloballyEnabled()) {
     throw new ApiError(404, "Not found");
   }
 }
 
-export async function isMemoryEnabledForOrganization(
+async function isMemoryEnabledForOrganization(
   organizationId: string,
 ): Promise<boolean> {
   if (!isMemoryGloballyEnabled()) {
