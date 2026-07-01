@@ -1,12 +1,23 @@
 "use client";
 
-import { Brain, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  Archive,
+  Brain,
+  ChevronLeft,
+  ChevronRight,
+  Pencil,
+  Plus,
+  Star,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { FormDialog } from "@/components/form-dialog";
 import { LoadingSpinner, LoadingWrapper } from "@/components/loading";
+import { SearchInput } from "@/components/search-input";
 import { TableRowActions } from "@/components/table-row-actions";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DialogForm, DialogStickyFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -32,6 +43,7 @@ import { useHasPermissions } from "@/lib/auth/auth.query";
 import { useFeature } from "@/lib/config/config.query";
 import {
   type MemoryEntry,
+  type MemoryTier,
   type MemoryVisibility,
   useCreateMemory,
   useDeleteMemory,
@@ -44,8 +56,24 @@ import {
 } from "@/lib/organization.query";
 import { useMyTeams, useTeams } from "@/lib/teams/team.query";
 import { formatRelativeTimeFromNow } from "@/lib/utils/date-time";
+import {
+  browseMemories,
+  CORE_CAP_PER_SCOPE,
+  MEMORY_INJECTION_TOTAL_CAP,
+  MEMORY_PAGE_SIZE,
+  type MemoryTierFilter,
+} from "./memory-page-utils";
 
 type MemoryTab = MemoryVisibility;
+
+const MEMORY_CAP_HELP =
+  `Store up to ${CORE_CAP_PER_SCOPE} core memories per scope. ` +
+  `Agents inject up to ${MEMORY_INJECTION_TOTAL_CAP} core memories total across personal, team, and org scopes. ` +
+  "Archival memories stay searchable in settings but are not injected.";
+
+function tierLabel(tier: MemoryTier): string {
+  return tier === "core" ? "Core" : "Archival";
+}
 
 function MemoryDisabledEmptyState() {
   const enableMemory = useUpdateMemorySettings(
@@ -71,6 +99,131 @@ function MemoryDisabledEmptyState() {
           {enableMemory.isPending ? "Enabling…" : "Enable durable memory"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+function MemoryOrgAdminBanner() {
+  const disableMemory = useUpdateMemorySettings(
+    "Durable memory disabled",
+    "Failed to disable durable memory",
+  );
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  return (
+    <>
+      <Alert>
+        <AlertTitle>Organization admin</AlertTitle>
+        <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            Durable memory is enabled for this organization. Disabling it blocks
+            recall and settings access for non-admins until re-enabled.
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={() => setConfirmOpen(true)}
+            disabled={disableMemory.isPending}
+          >
+            Disable durable memory
+          </Button>
+        </AlertDescription>
+      </Alert>
+
+      <DeleteConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Disable durable memory?"
+        description="Agents will stop injecting memories and most users lose access to memory settings until an admin re-enables it."
+        isPending={disableMemory.isPending}
+        onConfirm={() => {
+          disableMemory.mutate({ memoryEnabled: false });
+          setConfirmOpen(false);
+        }}
+        confirmLabel="Disable"
+        pendingLabel="Disabling..."
+      />
+    </>
+  );
+}
+
+function MemoryBrowseToolbar({
+  searchTerm,
+  onSearchChange,
+  tierFilter,
+  onTierFilterChange,
+  coreCount,
+}: {
+  searchTerm: string;
+  onSearchChange: (value: string) => void;
+  tierFilter: MemoryTierFilter;
+  onTierFilterChange: (value: MemoryTierFilter) => void;
+  coreCount: number;
+}) {
+  return (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center">
+        <SearchInput
+          placeholder="Search facts..."
+          syncQueryParams={false}
+          value={searchTerm}
+          onSearchChange={onSearchChange}
+          className="w-full sm:max-w-sm"
+        />
+        <Select
+          value={tierFilter}
+          onValueChange={(value) =>
+            onTierFilterChange(value as MemoryTierFilter)
+          }
+        >
+          <SelectTrigger
+            className="w-full sm:w-[160px]"
+            aria-label="Tier filter"
+          >
+            <SelectValue placeholder="All tiers" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All tiers</SelectItem>
+            <SelectItem value="core">Core only</SelectItem>
+            <SelectItem value="archival">Archival only</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <Badge variant="secondary" className="w-fit">
+        Core {coreCount}/{CORE_CAP_PER_SCOPE}
+      </Badge>
+    </div>
+  );
+}
+
+function MemoryTierSelect({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: MemoryTier;
+  onChange: (tier: MemoryTier) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>Tier</Label>
+      <Select
+        value={value}
+        onValueChange={(next) => onChange(next as MemoryTier)}
+      >
+        <SelectTrigger id={id}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="core">Core — injected into prompts</SelectItem>
+          <SelectItem value="archival">
+            Archival — stored only, not injected
+          </SelectItem>
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -159,26 +312,45 @@ function MemoryScopePanel({
   const deleteMemory = useDeleteMemory();
 
   const [newContent, setNewContent] = useState("");
+  const [newTier, setNewTier] = useState<MemoryTier>("core");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [tierFilter, setTierFilter] = useState<MemoryTierFilter>("all");
+  const [page, setPage] = useState(1);
   const [memoryToDelete, setMemoryToDelete] = useState<MemoryEntry | null>(
     null,
   );
   const [memoryToEdit, setMemoryToEdit] = useState<MemoryEntry | null>(null);
   const [editContent, setEditContent] = useState("");
+  const [editTier, setEditTier] = useState<MemoryTier>("core");
 
   const teamNameById = useMemo(
     () => new Map(teams.map((team) => [team.id, team.name])),
     [teams],
   );
 
-  const visibleMemories = useMemo(() => {
-    if (visibility !== "team" || !teamId) return memories;
-    return memories.filter((memory) => memory.teamId === teamId);
-  }, [memories, teamId, visibility]);
+  const browse = useMemo(
+    () =>
+      browseMemories({
+        memories,
+        teamId: visibility === "team" ? teamId : null,
+        tierFilter,
+        searchTerm,
+        page,
+      }),
+    [memories, page, searchTerm, teamId, tierFilter, visibility],
+  );
+
+  useEffect(() => {
+    if (page > browse.totalPages) {
+      setPage(browse.totalPages);
+    }
+  }, [browse.totalPages, page]);
 
   useEffect(() => {
     if (visibility !== "team" || teams.length === 0) return;
     if (teamId && teams.some((team) => team.id === teamId)) return;
     onTeamIdChange(teams[0]?.id ?? null);
+    setPage(1);
   }, [onTeamIdChange, teamId, teams, visibility]);
 
   const handleCreate = async () => {
@@ -189,9 +361,11 @@ function MemoryScopePanel({
     await createMemory.mutateAsync({
       content,
       visibility,
+      tier: newTier,
       ...(visibility === "team" && teamId ? { teamId } : {}),
     });
     setNewContent("");
+    setNewTier("core");
   };
 
   const handleUpdate = async () => {
@@ -203,9 +377,20 @@ function MemoryScopePanel({
       id: memoryToEdit.id,
       visibility,
       content,
+      tier: editTier,
     });
     setMemoryToEdit(null);
     setEditContent("");
+    setEditTier("core");
+  };
+
+  const handleTierToggle = async (memory: MemoryEntry) => {
+    const nextTier: MemoryTier = memory.tier === "core" ? "archival" : "core";
+    await updateMemory.mutateAsync({
+      id: memory.id,
+      visibility,
+      tier: nextTier,
+    });
   };
 
   const handleDelete = async () => {
@@ -216,6 +401,10 @@ function MemoryScopePanel({
     });
     setMemoryToDelete(null);
   };
+
+  const showTeamColumn = visibility === "team" && teams.length > 1;
+  const showActions = writeAccess.canUpdate || writeAccess.canDelete;
+  const emptyColSpan = 3 + (showTeamColumn ? 1 : 0) + (showActions ? 1 : 0);
 
   if (!isCheckingPermissions && !canReadMemories) {
     return (
@@ -230,12 +419,17 @@ function MemoryScopePanel({
 
   return (
     <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">{MEMORY_CAP_HELP}</p>
+
       {visibility === "team" && teams.length > 1 && (
         <div className="space-y-2">
           <Label htmlFor="memory-team">Team</Label>
           <Select
             value={teamId ?? undefined}
-            onValueChange={(value) => onTeamIdChange(value)}
+            onValueChange={(value) => {
+              onTeamIdChange(value);
+              setPage(1);
+            }}
           >
             <SelectTrigger id="memory-team" className="w-full max-w-sm">
               <SelectValue placeholder="Select a team" />
@@ -272,31 +466,52 @@ function MemoryScopePanel({
           </Alert>
         )}
 
+      <MemoryBrowseToolbar
+        searchTerm={searchTerm}
+        onSearchChange={(value) => {
+          setSearchTerm(value);
+          setPage(1);
+        }}
+        tierFilter={tierFilter}
+        onTierFilterChange={(value) => {
+          setTierFilter(value);
+          setPage(1);
+        }}
+        coreCount={browse.coreCount}
+      />
+
       {writeAccess.canCreate && (
-        <div className="flex gap-2">
-          <Input
-            value={newContent}
-            onChange={(event) => setNewContent(event.target.value)}
-            placeholder="Add a memory fact..."
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void handleCreate();
+        <div className="space-y-3 rounded-lg border p-4">
+          <div className="flex gap-2">
+            <Input
+              value={newContent}
+              onChange={(event) => setNewContent(event.target.value)}
+              placeholder="Add a memory fact..."
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void handleCreate();
+                }
+              }}
+            />
+            <Button
+              type="button"
+              onClick={() => void handleCreate()}
+              disabled={
+                createMemory.isPending ||
+                !newContent.trim() ||
+                (visibility === "team" && !teamId)
               }
-            }}
+            >
+              <Plus className="h-4 w-4" />
+              Add
+            </Button>
+          </div>
+          <MemoryTierSelect
+            id="new-memory-tier"
+            value={newTier}
+            onChange={setNewTier}
           />
-          <Button
-            type="button"
-            onClick={() => void handleCreate()}
-            disabled={
-              createMemory.isPending ||
-              !newContent.trim() ||
-              (visibility === "team" && !teamId)
-            }
-          >
-            <Plus className="h-4 w-4" />
-            Add
-          </Button>
         </div>
       )}
 
@@ -308,36 +523,40 @@ function MemoryScopePanel({
           <TableHeader>
             <TableRow>
               <TableHead>Fact</TableHead>
-              {visibility === "team" && teams.length > 1 && (
-                <TableHead>Team</TableHead>
-              )}
+              <TableHead className="w-[100px]">Tier</TableHead>
+              {showTeamColumn && <TableHead>Team</TableHead>}
               <TableHead>Updated</TableHead>
-              {(writeAccess.canUpdate || writeAccess.canDelete) && (
+              {showActions && (
                 <TableHead className="w-[100px]">Actions</TableHead>
               )}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {visibleMemories.length === 0 ? (
+            {browse.pageItems.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={
-                    2 +
-                    (visibility === "team" && teams.length > 1 ? 1 : 0) +
-                    (writeAccess.canUpdate || writeAccess.canDelete ? 1 : 0)
-                  }
+                  colSpan={emptyColSpan}
                   className="text-muted-foreground"
                 >
-                  No memories yet
+                  {browse.browsed.length === 0 && memories.length > 0
+                    ? "No memories match your filters"
+                    : "No memories yet"}
                 </TableCell>
               </TableRow>
             ) : (
-              visibleMemories.map((memory) => (
+              browse.pageItems.map((memory) => (
                 <TableRow key={memory.id}>
                   <TableCell className="whitespace-normal">
                     {memory.content}
                   </TableCell>
-                  {visibility === "team" && teams.length > 1 && (
+                  <TableCell>
+                    <Badge
+                      variant={memory.tier === "core" ? "default" : "secondary"}
+                    >
+                      {tierLabel(memory.tier)}
+                    </Badge>
+                  </TableCell>
+                  {showTeamColumn && (
                     <TableCell>
                       {memory.teamId
                         ? (teamNameById.get(memory.teamId) ?? "Unknown team")
@@ -347,7 +566,7 @@ function MemoryScopePanel({
                   <TableCell className="text-muted-foreground">
                     {formatRelativeTimeFromNow(memory.updatedAt)}
                   </TableCell>
-                  {(writeAccess.canUpdate || writeAccess.canDelete) && (
+                  {showActions && (
                     <TableCell>
                       <TableRowActions
                         actions={[
@@ -359,6 +578,7 @@ function MemoryScopePanel({
                                   onClick: () => {
                                     setMemoryToEdit(memory);
                                     setEditContent(memory.content);
+                                    setEditTier(memory.tier);
                                   },
                                 },
                               ]
@@ -374,6 +594,25 @@ function MemoryScopePanel({
                               ]
                             : []),
                         ]}
+                        dropdownActions={
+                          writeAccess.canUpdate
+                            ? [
+                                memory.tier === "core"
+                                  ? {
+                                      icon: <Archive className="h-4 w-4" />,
+                                      label: "Archive",
+                                      onClick: () =>
+                                        void handleTierToggle(memory),
+                                    }
+                                  : {
+                                      icon: <Star className="h-4 w-4" />,
+                                      label: "Make core",
+                                      onClick: () =>
+                                        void handleTierToggle(memory),
+                                    },
+                              ]
+                            : undefined
+                        }
                       />
                     </TableCell>
                   )}
@@ -384,12 +623,46 @@ function MemoryScopePanel({
         </Table>
       </LoadingWrapper>
 
+      {browse.browsed.length > MEMORY_PAGE_SIZE && (
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <span>
+            Page {browse.pageCount} of {browse.totalPages} (
+            {browse.browsed.length} facts)
+          </span>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={browse.pageCount <= 1}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={browse.pageCount >= browse.totalPages}
+              onClick={() =>
+                setPage((current) => Math.min(browse.totalPages, current + 1))
+              }
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       <FormDialog
         open={!!memoryToEdit}
         onOpenChange={(open) => {
           if (!open) {
             setMemoryToEdit(null);
             setEditContent("");
+            setEditTier("core");
           }
         }}
         title="Edit memory"
@@ -414,6 +687,11 @@ function MemoryScopePanel({
                 rows={4}
               />
             </div>
+            <MemoryTierSelect
+              id="edit-memory-tier"
+              value={editTier}
+              onChange={setEditTier}
+            />
           </div>
           <DialogStickyFooter>
             <Button
@@ -422,6 +700,7 @@ function MemoryScopePanel({
               onClick={() => {
                 setMemoryToEdit(null);
                 setEditContent("");
+                setEditTier("core");
               }}
               disabled={updateMemory.isPending}
             >
@@ -505,43 +784,47 @@ export default function MemorySettingsPage() {
   }
 
   return (
-    <Tabs
-      value={activeTab}
-      onValueChange={(value) => setActiveTab(value as MemoryTab)}
-      className="space-y-6"
-    >
-      <TabsList>
-        <TabsTrigger value="personal">Personal</TabsTrigger>
-        <TabsTrigger value="team">Team</TabsTrigger>
-        <TabsTrigger value="org">Org</TabsTrigger>
-      </TabsList>
+    <div className="space-y-6">
+      {isMemoryAdmin && <MemoryOrgAdminBanner />}
 
-      <TabsContent value="personal">
-        <MemoryScopePanel
-          visibility="personal"
-          teamId={null}
-          onTeamIdChange={() => {}}
-          memoryOrgEnabled={memoryOrgEnabled}
-        />
-      </TabsContent>
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as MemoryTab)}
+        className="space-y-6"
+      >
+        <TabsList>
+          <TabsTrigger value="personal">Personal</TabsTrigger>
+          <TabsTrigger value="team">Team</TabsTrigger>
+          <TabsTrigger value="org">Org</TabsTrigger>
+        </TabsList>
 
-      <TabsContent value="team">
-        <MemoryScopePanel
-          visibility="team"
-          teamId={selectedTeamId}
-          onTeamIdChange={setSelectedTeamId}
-          memoryOrgEnabled={memoryOrgEnabled}
-        />
-      </TabsContent>
+        <TabsContent value="personal">
+          <MemoryScopePanel
+            visibility="personal"
+            teamId={null}
+            onTeamIdChange={() => {}}
+            memoryOrgEnabled={memoryOrgEnabled}
+          />
+        </TabsContent>
 
-      <TabsContent value="org">
-        <MemoryScopePanel
-          visibility="org"
-          teamId={null}
-          onTeamIdChange={() => {}}
-          memoryOrgEnabled={memoryOrgEnabled}
-        />
-      </TabsContent>
-    </Tabs>
+        <TabsContent value="team">
+          <MemoryScopePanel
+            visibility="team"
+            teamId={selectedTeamId}
+            onTeamIdChange={setSelectedTeamId}
+            memoryOrgEnabled={memoryOrgEnabled}
+          />
+        </TabsContent>
+
+        <TabsContent value="org">
+          <MemoryScopePanel
+            visibility="org"
+            teamId={null}
+            onTeamIdChange={() => {}}
+            memoryOrgEnabled={memoryOrgEnabled}
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 }

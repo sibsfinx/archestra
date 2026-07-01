@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
 import db, { schema, type Transaction } from "@/database";
 import type {
   InsertMemory,
@@ -7,6 +7,10 @@ import type {
   MemoryVisibility,
   UpdateMemory,
 } from "@/types/memory";
+import {
+  MEMORY_INJECTION_TOTAL_CAP,
+  mergeCoreMemoriesForInjection,
+} from "./memory-injection";
 
 function buildReadScopeCondition(params: {
   organizationId: string;
@@ -76,23 +80,74 @@ class MemoryModel {
     organizationId: string;
     userId: string;
     teamIds: string[];
-    limit: number;
   }): Promise<Memory[]> {
-    return db
-      .select()
-      .from(schema.memoriesTable)
-      .where(
-        and(
-          buildReadScopeCondition({
-            organizationId: params.organizationId,
-            userId: params.userId,
-            teamIds: params.teamIds,
-          }),
-          eq(schema.memoriesTable.tier, "core"),
-        ),
-      )
-      .orderBy(desc(schema.memoriesTable.createdAt))
-      .limit(params.limit);
+    const coreTier = eq(schema.memoriesTable.tier, "core");
+    const fetchLimit = MEMORY_INJECTION_TOTAL_CAP;
+
+    const [personalRows, orgRows, teamBucketRows] = await Promise.all([
+      db
+        .select()
+        .from(schema.memoriesTable)
+        .where(
+          and(
+            eq(schema.memoriesTable.organizationId, params.organizationId),
+            eq(schema.memoriesTable.visibility, "personal"),
+            eq(schema.memoriesTable.userId, params.userId),
+            coreTier,
+          ),
+        )
+        .orderBy(
+          desc(schema.memoriesTable.createdAt),
+          asc(schema.memoriesTable.id),
+        )
+        .limit(fetchLimit),
+      db
+        .select()
+        .from(schema.memoriesTable)
+        .where(
+          and(
+            eq(schema.memoriesTable.organizationId, params.organizationId),
+            eq(schema.memoriesTable.visibility, "org"),
+            coreTier,
+          ),
+        )
+        .orderBy(
+          desc(schema.memoriesTable.createdAt),
+          asc(schema.memoriesTable.id),
+        )
+        .limit(fetchLimit),
+      params.teamIds.length > 0
+        ? Promise.all(
+            params.teamIds.map((teamId) =>
+              db
+                .select()
+                .from(schema.memoriesTable)
+                .where(
+                  and(
+                    eq(
+                      schema.memoriesTable.organizationId,
+                      params.organizationId,
+                    ),
+                    eq(schema.memoriesTable.visibility, "team"),
+                    eq(schema.memoriesTable.teamId, teamId),
+                    coreTier,
+                  ),
+                )
+                .orderBy(
+                  desc(schema.memoriesTable.createdAt),
+                  asc(schema.memoriesTable.id),
+                )
+                .limit(fetchLimit),
+            ),
+          )
+        : Promise.resolve([] as Memory[][]),
+    ]);
+
+    return mergeCoreMemoriesForInjection([
+      personalRows,
+      orgRows,
+      ...teamBucketRows,
+    ]);
   }
 
   static async create(

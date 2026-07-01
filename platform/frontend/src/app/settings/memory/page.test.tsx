@@ -13,6 +13,12 @@ const mockUseFeature = vi.fn();
 const mockUseOrganization = vi.fn();
 const mockUseUpdateMemorySettings = vi.fn();
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+  usePathname: () => "/settings/memory",
+}));
+
 vi.mock("@/lib/auth/auth.query", () => ({
   useHasPermissions: (params: Record<string, string[]>) =>
     mockUseHasPermissions(params),

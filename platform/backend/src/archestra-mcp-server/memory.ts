@@ -6,7 +6,7 @@ import db, { schema } from "@/database";
 import logger from "@/logging";
 import { MemoryModel, TeamModel } from "@/models";
 import OrganizationModel from "@/models/organization";
-import type { Memory, MemoryTier } from "@/types";
+import type { Memory } from "@/types";
 import { isUniqueConstraintError } from "@/utils/db";
 import {
   defineArchestraTool,
@@ -40,7 +40,6 @@ const MemoryToolArgsSchema = z.object({
   content: z.string().max(MAX_CONTENT_CHARS).optional(),
   id: z.string().uuid().optional(),
   query: z.string().max(200).optional(),
-  tier: z.enum(["core", "archival"]).optional(),
 });
 
 type UserContext = {
@@ -85,11 +84,22 @@ function buildReadScopeCondition(params: {
   );
 }
 
-function formatMemory(memory: Memory) {
+function formatMemoryAuditSnapshot(memory: Memory) {
   return {
     id: memory.id,
     content: memory.content,
     tier: memory.tier,
+    visibility: memory.visibility,
+    createdAt: memory.createdAt.toISOString(),
+    updatedAt: memory.updatedAt.toISOString(),
+  };
+}
+
+/** Chat-facing tool payload — tier is managed in Settings, not exposed in chat. */
+function formatMemoryForChat(memory: Memory) {
+  return {
+    id: memory.id,
+    content: memory.content,
     visibility: memory.visibility,
     createdAt: memory.createdAt.toISOString(),
     updatedAt: memory.updatedAt.toISOString(),
@@ -156,15 +166,10 @@ async function viewPersonalMemories(
         "No matching memory found.",
       );
     }
-    if (args.tier && memory.tier !== args.tier) {
-      return structuredSuccessResult(
-        { memories: [] },
-        "No matching memory found.",
-      );
-    }
+    const formatted = formatMemoryForChat(memory);
     return structuredSuccessResult(
-      { memories: [formatMemory(memory)] },
-      JSON.stringify({ memories: [formatMemory(memory)] }, null, 2),
+      { memories: [formatted] },
+      JSON.stringify({ memories: [formatted] }, null, 2),
     );
   }
 
@@ -172,11 +177,10 @@ async function viewPersonalMemories(
     organizationId: ctx.organizationId,
     userId: ctx.userId,
     teamIds: await getReadableTeamIds(ctx.userId),
-    tier: args.tier,
     visibility: "personal",
   });
 
-  const formatted = memories.map(formatMemory);
+  const formatted = memories.map(formatMemoryForChat);
   return structuredSuccessResult(
     { memories: formatted },
     JSON.stringify({ memories: formatted }, null, 2),
@@ -201,17 +205,13 @@ async function searchReadableMemories(
     }),
     ilike(schema.memoriesTable.content, `%${escapeLikePattern(query)}%`),
   ];
-  if (args.tier) {
-    conditions.push(eq(schema.memoriesTable.tier, args.tier));
-  }
-
   const memories = await db
     .select()
     .from(schema.memoriesTable)
     .where(and(...conditions))
     .orderBy(desc(schema.memoriesTable.createdAt));
 
-  const formatted = memories.map(formatMemory);
+  const formatted = memories.map(formatMemoryForChat);
   return structuredSuccessResult(
     { memories: formatted },
     JSON.stringify({ memories: formatted }, null, 2),
@@ -246,19 +246,16 @@ async function createPersonalMemory(
     return errorResult("create requires non-empty content.");
   }
 
-  const tier: MemoryTier = args.tier ?? "core";
   const duplicate = await findPersonalDuplicate(ctx, content);
   if (duplicate) {
     return successResult("Memory already exists with the same content.");
   }
 
-  if (tier === "core") {
-    const coreCount = await countPersonalCoreMemories(ctx);
-    if (coreCount >= MAX_CORE_ITEMS_PER_SCOPE) {
-      return errorResult(
-        `You already have ${MAX_CORE_ITEMS_PER_SCOPE} core personal memories. Archive or delete one before adding another.`,
-      );
-    }
+  const coreCount = await countPersonalCoreMemories(ctx);
+  if (coreCount >= MAX_CORE_ITEMS_PER_SCOPE) {
+    return errorResult(
+      `You already have ${MAX_CORE_ITEMS_PER_SCOPE} personal memories. Remove one in Settings before adding another.`,
+    );
   }
 
   const insertValues = {
@@ -267,7 +264,7 @@ async function createPersonalMemory(
     userId: ctx.userId,
     teamId: null,
     content,
-    tier,
+    tier: "core" as const,
     createdBy: ctx.userId,
     taintedAtWrite: false,
   };
@@ -309,7 +306,7 @@ async function createPersonalMemory(
         outcome: "success",
         resourceType: "memory",
         resourceId: row.id,
-        after: formatMemory(row),
+        after: formatMemoryAuditSnapshot(row),
         httpMethod: null,
         httpPath: null,
       });
@@ -334,7 +331,7 @@ async function createPersonalMemory(
 
   if (created.row && !created.duplicate) {
     return structuredSuccessResult(
-      { memory: formatMemory(created.row) },
+      { memory: formatMemoryForChat(created.row) },
       `Saved memory ${created.row.id}.`,
     );
   }
@@ -379,16 +376,6 @@ async function updatePersonalMemory(
     );
   }
 
-  const tier = args.tier ?? existing.tier;
-  if (tier === "core" && existing.tier !== "core") {
-    const coreCount = await countPersonalCoreMemories(ctx);
-    if (coreCount >= MAX_CORE_ITEMS_PER_SCOPE) {
-      return errorResult(
-        `You already have ${MAX_CORE_ITEMS_PER_SCOPE} core personal memories. Archive or delete one before promoting this memory.`,
-      );
-    }
-  }
-
   let updated: { row: Memory } | { error: string };
   try {
     updated = await db.transaction(
@@ -415,7 +402,7 @@ async function updatePersonalMemory(
 
         const [row] = await tx
           .update(schema.memoriesTable)
-          .set({ content, tier })
+          .set({ content })
           .where(eq(schema.memoriesTable.id, memoryId))
           .returning();
 
@@ -430,8 +417,8 @@ async function updatePersonalMemory(
           outcome: "success",
           resourceType: "memory",
           resourceId: row.id,
-          before: formatMemory(existing),
-          after: formatMemory(row),
+          before: formatMemoryAuditSnapshot(existing),
+          after: formatMemoryAuditSnapshot(row),
           httpMethod: null,
           httpPath: null,
         });
@@ -460,7 +447,7 @@ async function updatePersonalMemory(
   );
 
   return structuredSuccessResult(
-    { memory: formatMemory(updated.row) },
+    { memory: formatMemoryForChat(updated.row) },
     `Updated memory ${updated.row.id}.`,
   );
 }
@@ -510,7 +497,7 @@ async function deletePersonalMemory(
       outcome: "success",
       resourceType: "memory",
       resourceId: existing.id,
-      before: formatMemory(existing),
+      before: formatMemoryAuditSnapshot(existing),
       httpMethod: null,
       httpPath: null,
     });

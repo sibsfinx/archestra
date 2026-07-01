@@ -8,7 +8,6 @@ import {
 } from "@archestra/shared";
 import type { Tool } from "ai";
 import { archestraMcpBranding } from "@/archestra-mcp-server";
-import { MAX_CORE_ITEMS_PER_SCOPE } from "@/archestra-mcp-server/memory";
 import logger from "@/logging";
 import { MemoryModel, TeamModel, UserModel } from "@/models";
 import { buildSkillCatalogPrompt } from "@/skills/skill-catalog-prompt";
@@ -165,7 +164,6 @@ async function renderAgentPrompt(params: {
             organizationId,
             userId,
             teamIds,
-            limit: MAX_CORE_ITEMS_PER_SCOPE,
           })
         : [];
 

@@ -227,6 +227,121 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  test("injects personal core memory even when many newer org core memories exist", async ({
+    makeAgent,
+    makeUser,
+    makeMember,
+  }) => {
+    const agent = await makeAgent({
+      systemPrompt:
+        `Facts ${SYSTEM_PROMPT_VARIABLE_EXPRESSIONS.memories}: ` +
+        "{{#each memories}}{{content}};{{/each}}",
+      toolExposureMode: "full",
+    });
+    const actingUser = await makeUser();
+    await makeMember(actingUser.id, agent.organizationId);
+
+    const baseTime = new Date("2026-06-01T12:00:00.000Z");
+    for (let index = 0; index < 50; index += 1) {
+      await db.insert(schema.memoriesTable).values({
+        organizationId: agent.organizationId,
+        visibility: "org",
+        userId: null,
+        teamId: null,
+        content: `org-noise-${index}`,
+        tier: "core",
+        createdBy: actingUser.id,
+        createdAt: new Date(baseTime.getTime() + index * 1000),
+        updatedAt: new Date(baseTime.getTime() + index * 1000),
+      });
+    }
+
+    await db.insert(schema.memoriesTable).values({
+      organizationId: agent.organizationId,
+      visibility: "personal",
+      userId: actingUser.id,
+      teamId: null,
+      content: "old-personal-priority",
+      tier: "core",
+      createdBy: actingUser.id,
+      createdAt: new Date("2020-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2020-01-01T00:00:00.000Z"),
+    });
+
+    const prompt = await buildAgentSystemPrompt({
+      agent,
+      mcpTools: {},
+      organizationId: agent.organizationId,
+      userId: actingUser.id,
+      agentId: agent.id,
+    });
+
+    expect(prompt).toContain("old-personal-priority;");
+  });
+
+  test("injects older team core memory when another team has many newer core memories", async ({
+    makeAgent,
+    makeUser,
+    makeMember,
+    makeTeam,
+    makeTeamMember,
+  }) => {
+    const agent = await makeAgent({
+      systemPrompt:
+        `Facts ${SYSTEM_PROMPT_VARIABLE_EXPRESSIONS.memories}: ` +
+        "{{#each memories}}{{content}};{{/each}}",
+      toolExposureMode: "full",
+    });
+    const actingUser = await makeUser();
+    await makeMember(actingUser.id, agent.organizationId);
+
+    const noisyTeam = await makeTeam(agent.organizationId, actingUser.id, {
+      name: "Noisy Team",
+    });
+    const quietTeam = await makeTeam(agent.organizationId, actingUser.id, {
+      name: "Quiet Team",
+    });
+    await makeTeamMember(noisyTeam.id, actingUser.id);
+    await makeTeamMember(quietTeam.id, actingUser.id);
+
+    const baseTime = new Date("2026-06-01T12:00:00.000Z");
+    for (let index = 0; index < 50; index += 1) {
+      await db.insert(schema.memoriesTable).values({
+        organizationId: agent.organizationId,
+        visibility: "team",
+        userId: null,
+        teamId: noisyTeam.id,
+        content: `noisy-team-${index}`,
+        tier: "core",
+        createdBy: actingUser.id,
+        createdAt: new Date(baseTime.getTime() + index * 1000),
+        updatedAt: new Date(baseTime.getTime() + index * 1000),
+      });
+    }
+
+    await db.insert(schema.memoriesTable).values({
+      organizationId: agent.organizationId,
+      visibility: "team",
+      userId: null,
+      teamId: quietTeam.id,
+      content: "old-quiet-team-priority",
+      tier: "core",
+      createdBy: actingUser.id,
+      createdAt: new Date("2020-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2020-01-01T00:00:00.000Z"),
+    });
+
+    const prompt = await buildAgentSystemPrompt({
+      agent,
+      mcpTools: {},
+      organizationId: agent.organizationId,
+      userId: actingUser.id,
+      agentId: agent.id,
+    });
+
+    expect(prompt).toContain("old-quiet-team-priority;");
+  });
+
   test("renders Handlebars user context from a fetched user and their teams", async ({
     makeAgent,
     makeUser,

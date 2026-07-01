@@ -2,6 +2,7 @@ import type { ResourceVisibilityScope } from "@archestra/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useHasPermissions } from "@/lib/auth/auth.query";
+import { organizationKeys } from "@/lib/organization.query";
 import { handleApiError, toApiError } from "@/lib/utils";
 
 export type MemoryTier = "core" | "archival";
@@ -57,8 +58,12 @@ async function memoryRequest<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       error = { message: `Request failed (${response.status})` };
     }
+    const apiError = toApiError(error);
+    if (response.status === 403) {
+      throw Object.assign(apiError, { httpStatus: 403 as const });
+    }
     handleApiError(error);
-    throw toApiError(error);
+    throw apiError;
   }
 
   return response.json() as Promise<T>;
@@ -68,15 +73,30 @@ export function useMemories(
   visibility: MemoryVisibility,
   options?: { enabled?: boolean },
 ) {
+  const queryClient = useQueryClient();
   const { data: canReadMemories } = useHasPermissions({ memory: ["read"] });
 
   return useQuery({
     queryKey: ["memories", visibility],
     queryFn: async () => {
-      const result = await memoryRequest<{ data: MemoryEntry[] }>(
-        `/api/memory?visibility=${encodeURIComponent(visibility)}`,
-      );
-      return result.data ?? [];
+      try {
+        const result = await memoryRequest<{ data: MemoryEntry[] }>(
+          `/api/memory?visibility=${encodeURIComponent(visibility)}`,
+        );
+        return result.data ?? [];
+      } catch (error) {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "httpStatus" in error &&
+          (error as { httpStatus?: number }).httpStatus === 403
+        ) {
+          await queryClient.invalidateQueries({
+            queryKey: organizationKeys.details(),
+          });
+        }
+        throw error;
+      }
     },
     enabled: (options?.enabled ?? true) && !!canReadMemories,
   });

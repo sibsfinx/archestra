@@ -217,6 +217,40 @@ describe("memory tool execution", () => {
     expect(rowCount).toBe(1);
   });
 
+  test("tool responses omit tier — tier is managed in Settings only", async () => {
+    await seedMemory({
+      organizationId,
+      visibility: "personal",
+      userId,
+      teamId: null,
+      content: "chat-visible-fact",
+      tier: "core",
+      createdBy: userId,
+    });
+
+    const searchResult = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "search", query: "chat-visible" },
+      context,
+    );
+    expect(searchResult.isError).toBeFalsy();
+    const searched = memoriesFrom(searchResult);
+    expect(searched).toHaveLength(1);
+    expect(searched[0]).not.toHaveProperty("tier");
+    expect(searched[0].content).toBe("chat-visible-fact");
+
+    const createResult = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "create", content: "agent-saved-from-chat" },
+      context,
+    );
+    expect(createResult.isError).toBeFalsy();
+    const created = (createResult.structuredContent as { memory?: unknown })
+      ?.memory;
+    expect(created).toBeDefined();
+    expect(created).not.toHaveProperty("tier");
+  });
+
   test("delete while tainted does not remove row and returns manual-add message", async () => {
     const memory = await seedMemory({
       organizationId,
