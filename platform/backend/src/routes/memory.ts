@@ -47,11 +47,8 @@ const UpdateMemoryBodySchema = z.object({
 });
 
 const memoryRoutes: FastifyPluginAsyncZod = async (fastify) => {
-  fastify.addHook("onRequest", async (request) => {
-    assertMemoryGloballyEnabled();
-    if (request.organizationId) {
-      await assertMemoryEnabledForOrganization(request.organizationId);
-    }
+  fastify.addHook("preHandler", async (request) => {
+    await assertMemoryEnabledForOrganization(request.organizationId);
   });
 
   fastify.get(
@@ -68,12 +65,17 @@ const memoryRoutes: FastifyPluginAsyncZod = async (fastify) => {
       },
     },
     async ({ query: { visibility }, organizationId, user }, reply) => {
+      const checker = await getMemoryPermissionChecker({
+        userId: user.id,
+        organizationId,
+      });
       const teamIds = await TeamModel.getUserTeamIds(user.id);
       const memories = await MemoryModel.listReadable({
         organizationId,
         userId: user.id,
         teamIds,
         visibility,
+        includeAllTeams: checker.isAdmin && visibility === "team",
       });
 
       return reply.send({ data: memories });
@@ -113,6 +115,9 @@ const memoryRoutes: FastifyPluginAsyncZod = async (fastify) => {
       }
 
       const content = body.content.trim();
+      if (!content) {
+        throw new ApiError(400, "content is required");
+      }
       const tier: MemoryTier = body.tier ?? "core";
 
       const [existingDuplicate] = await db
@@ -237,7 +242,14 @@ const memoryRoutes: FastifyPluginAsyncZod = async (fastify) => {
         throw new ApiError(400, "No fields to update");
       }
 
-      const nextContent = body.content?.trim() ?? existing.content;
+      let nextContent = existing.content;
+      if (body.content !== undefined) {
+        const trimmed = body.content.trim();
+        if (!trimmed) {
+          throw new ApiError(400, "content is required");
+        }
+        nextContent = trimmed;
+      }
       const nextTier = body.tier ?? existing.tier;
 
       if (nextContent !== existing.content) {

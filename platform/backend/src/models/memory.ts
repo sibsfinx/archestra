@@ -12,6 +12,7 @@ function buildReadScopeCondition(params: {
   organizationId: string;
   userId: string;
   teamIds: string[];
+  includeAllTeams?: boolean;
 }) {
   const visibilityConditions = [
     and(
@@ -21,7 +22,9 @@ function buildReadScopeCondition(params: {
     eq(schema.memoriesTable.visibility, "org"),
   ];
 
-  if (params.teamIds.length > 0) {
+  if (params.includeAllTeams) {
+    visibilityConditions.push(eq(schema.memoriesTable.visibility, "team"));
+  } else if (params.teamIds.length > 0) {
     visibilityConditions.push(
       and(
         eq(schema.memoriesTable.visibility, "team"),
@@ -42,6 +45,7 @@ class MemoryModel {
     organizationId: string;
     userId: string;
     teamIds: string[];
+    includeAllTeams?: boolean;
     tier?: MemoryTier;
     visibility?: MemoryVisibility;
   }): Promise<Memory[]> {
@@ -50,6 +54,7 @@ class MemoryModel {
         organizationId: params.organizationId,
         userId: params.userId,
         teamIds: params.teamIds,
+        includeAllTeams: params.includeAllTeams,
       }),
     ];
 

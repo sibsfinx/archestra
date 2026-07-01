@@ -35,7 +35,7 @@ describe("GET /api/memory", () => {
     actingUser = await makeUser();
 
     app = createFastifyInstance();
-    app.addHook("onRequest", async (request) => {
+    app.addHook("preHandler", async (request) => {
       Object.assign(request, { user: actingUser, organizationId });
     });
     await app.register(memoryRoutes);
@@ -198,6 +198,36 @@ describe("GET /api/memory", () => {
     expect(orgResponse.statusCode).toBe(200);
     expect(orgResponse.json().data).toEqual([]);
   });
+
+  test("memory admins can list team memories for teams they do not belong to", async ({
+    makeMember,
+    makeTeam,
+    makeUser,
+  }) => {
+    const teamOwner = await makeUser();
+    await makeMember(teamOwner.id, organizationId, { role: MEMBER_ROLE_NAME });
+    await makeMember(actingUser.id, organizationId, { role: ADMIN_ROLE_NAME });
+
+    const team = await makeTeam(organizationId, teamOwner.id);
+    await seedMemory({
+      organizationId,
+      visibility: "team",
+      userId: null,
+      teamId: team.id,
+      content: "foreign-team-runbook",
+      tier: "core",
+      createdBy: teamOwner.id,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/memory?visibility=team",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toHaveLength(1);
+    expect(response.json().data[0].content).toBe("foreign-team-runbook");
+  });
 });
 
 describe("POST /api/memory", () => {
@@ -210,7 +240,7 @@ describe("POST /api/memory", () => {
     actingUser = await makeUser();
 
     app = createFastifyInstance();
-    app.addHook("onRequest", async (request) => {
+    app.addHook("preHandler", async (request) => {
       Object.assign(request, { user: actingUser, organizationId });
     });
     await app.register(memoryRoutes);
@@ -235,6 +265,21 @@ describe("POST /api/memory", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().content).toBe("prefers concise answers");
     expect(response.json().visibility).toBe("personal");
+  });
+
+  test("rejects whitespace-only content on create", async ({ makeMember }) => {
+    await makeMember(actingUser.id, organizationId, { role: MEMBER_ROLE_NAME });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/memory",
+      payload: {
+        content: "   ",
+        visibility: "personal",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
   });
 
   test("members cannot create org-scoped memories", async ({ makeMember }) => {
@@ -379,7 +424,7 @@ describe("PATCH /api/memory/:id", () => {
     actingUser = await makeUser();
 
     app = createFastifyInstance();
-    app.addHook("onRequest", async (request) => {
+    app.addHook("preHandler", async (request) => {
       Object.assign(request, { user: actingUser, organizationId });
     });
     await app.register(memoryRoutes);
@@ -414,6 +459,28 @@ describe("PATCH /api/memory/:id", () => {
     });
 
     expect(response.statusCode).toBe(403);
+  });
+
+  test("rejects whitespace-only content on update", async ({ makeMember }) => {
+    await makeMember(actingUser.id, organizationId, { role: MEMBER_ROLE_NAME });
+
+    const memory = await seedMemory({
+      organizationId,
+      visibility: "personal",
+      userId: actingUser.id,
+      teamId: null,
+      content: "keep-me",
+      tier: "core",
+      createdBy: actingUser.id,
+    });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/memory/${memory?.id}`,
+      payload: { content: "  \t  " },
+    });
+
+    expect(response.statusCode).toBe(400);
   });
 
   test("rejects update to duplicate content in the same scope", async ({
@@ -549,7 +616,7 @@ describe("DELETE /api/memory/:id", () => {
     actingUser = await makeUser();
 
     app = createFastifyInstance();
-    app.addHook("onRequest", async (request) => {
+    app.addHook("preHandler", async (request) => {
       Object.assign(request, { user: actingUser, organizationId });
     });
     await app.register(memoryRoutes);
@@ -633,7 +700,7 @@ describe("memory feature gates", () => {
     actingUser = await makeUser();
 
     app = createFastifyInstance();
-    app.addHook("onRequest", async (request) => {
+    app.addHook("preHandler", async (request) => {
       Object.assign(request, { user: actingUser, organizationId });
     });
     await app.register(memoryRoutes);
