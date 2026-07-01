@@ -13,7 +13,7 @@ import {
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -188,6 +188,8 @@ export function AuthViewWithErrorHandling({
     ? identityProvidersData
     : [];
   const hasIdentityProviders = identityProviders.length > 0;
+  const pathRef = useRef(path);
+  pathRef.current = path;
 
   // Check for SSO error in query params
   useEffect(() => {
@@ -264,7 +266,7 @@ export function AuthViewWithErrorHandling({
         if (
           isPasswordResetRequest &&
           !response.ok &&
-          path === "forgot-password"
+          pathRef.current === "forgot-password"
         ) {
           const message = await getAuthErrorMessageFromResponse(response);
           toast.error(
