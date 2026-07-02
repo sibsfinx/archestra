@@ -17,7 +17,16 @@ class MessageModel {
   ): Promise<void> {
     await db
       .update(schema.conversationsTable)
-      .set({ updatedAt: new Date(), lastMessageAt: new Date() })
+      .set({
+        updatedAt: new Date(),
+        lastMessageAt: new Date(),
+        // Tie-proof companion to lastMessageAt: a fresh tick from the shared
+        // message sequence on EVERY touch — new messages and in-place content
+        // updates (tool results) alike — read by the unread predicate.
+        // Timestamps can collide when a read and new activity land in the
+        // same instant; monotonic sequence values cannot.
+        lastMessageSeq: sql`nextval('messages_seq_seq')`,
+      })
       .where(eq(schema.conversationsTable.id, conversationId));
   }
 
@@ -57,7 +66,7 @@ class MessageModel {
       .select()
       .from(schema.messagesTable)
       .where(eq(schema.messagesTable.conversationId, conversationId))
-      .orderBy(schema.messagesTable.createdAt);
+      .orderBy(schema.messagesTable.seq, schema.messagesTable.createdAt);
 
     return messages;
   }
@@ -228,13 +237,19 @@ class MessageModel {
       throw new Error("Message does not belong to the specified conversation");
     }
 
-    // Delete all messages in this conversation created after this message
+    // Delete all messages in this conversation inserted after this message.
+    // seq is the insertion order: createdAt has finite precision and
+    // back-to-back messages can tie, which made the strictly-greater
+    // createdAt comparison silently miss the later one. Rows written before
+    // the seq migration's backfill cannot lack seq, but stay defensive.
     await db
       .delete(schema.messagesTable)
       .where(
         and(
           eq(schema.messagesTable.conversationId, conversationId),
-          gt(schema.messagesTable.createdAt, message.createdAt),
+          message.seq !== null
+            ? gt(schema.messagesTable.seq, message.seq)
+            : gt(schema.messagesTable.createdAt, message.createdAt),
         ),
       );
   }
@@ -289,14 +304,17 @@ class MessageModel {
         .where(eq(schema.messagesTable.id, messageId))
         .returning();
 
-      // Delete subsequent messages if requested
+      // Delete subsequent messages if requested. seq comparison, not
+      // createdAt — see deleteSubsequentMessages above for why.
       if (deleteSubsequent) {
         await tx
           .delete(schema.messagesTable)
           .where(
             and(
               eq(schema.messagesTable.conversationId, message.conversationId),
-              gt(schema.messagesTable.createdAt, message.createdAt),
+              message.seq !== null
+                ? gt(schema.messagesTable.seq, message.seq)
+                : gt(schema.messagesTable.createdAt, message.createdAt),
             ),
           );
       }
