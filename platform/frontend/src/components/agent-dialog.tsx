@@ -155,6 +155,10 @@ import {
 } from "./agent-dialog.utils";
 
 type Agent = archestraApiTypes.GetAllAgentsResponses["200"][number];
+type AgentMemoryFields = {
+  sharedMemoryWriteEnabled?: boolean;
+};
+type AgentWithMemoryConfig = Agent & AgentMemoryFields;
 type ToolExposureMode = Agent["toolExposureMode"];
 
 // Component to display tools for a specific agent
@@ -429,6 +433,19 @@ function getScopeOptions(agentType: string) {
   ];
 }
 
+function getAgentMemoryScopeHelp(scope: AgentScope): string {
+  const recallNote =
+    "The chatting user's personal memory remains available for recall.";
+  switch (scope) {
+    case "personal":
+      return `Personal agents save and read personal memory during chat. ${recallNote}`;
+    case "team":
+      return `Team agents save and read team memory for assigned teams. ${recallNote}`;
+    case "org":
+      return `Organization agents save and read org memory. ${recallNote}`;
+  }
+}
+
 function AccessLevelSelector({
   scope,
   onScopeChange,
@@ -696,6 +713,7 @@ export function AgentDialog({
   // New agents default to implicit ("All tools") access; editing an existing
   // agent overwrites this from its stored value.
   const [accessAllTools, setAccessAllTools] = useState(true);
+  const [sharedMemoryWriteEnabled, setSharedMemoryWriteEnabled] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
   // Determine type-specific visibility based on agentType prop
@@ -760,6 +778,7 @@ export function AgentDialog({
       const agentData = freshAgent || agent;
 
       if (agentData) {
+        const agentWithMemory = agentData as AgentWithMemoryConfig;
         setName(agentData.name);
         setIcon(agentData.icon);
         setDescription(agentData.description || "");
@@ -779,6 +798,9 @@ export function AgentDialog({
         setToolExposureMode(agentData.toolExposureMode ?? "full");
         setAccessAllTools(agentData.accessAllTools ?? false);
         setScope(agentData.scope);
+        setSharedMemoryWriteEnabled(
+          agentWithMemory.sharedMemoryWriteEnabled ?? true,
+        );
         setAutoConfigureOnToolDiscovery(
           agentData.builtInAgentConfig?.name ===
             BUILT_IN_AGENT_IDS.POLICY_CONFIG
@@ -817,6 +839,7 @@ export function AgentDialog({
         // to "Custom" (explicitly assigned tools).
         setToolExposureMode("full");
         setAccessAllTools(true);
+        setSharedMemoryWriteEnabled(true);
         setAutoConfigureOnToolDiscovery(false);
         setDualLlmMaxRounds("5");
       }
@@ -1034,6 +1057,8 @@ export function AgentDialog({
             teams: assignedTeamIds,
             labels: updatedLabels,
             scope,
+            ...(isInternalAgent &&
+              !isBuiltIn && { sharedMemoryWriteEnabled }),
             ...(showSecurity && { considerContextUntrusted }),
             ...(agentType === "mcp_gateway" && {
               passthroughHeaders:
@@ -1075,6 +1100,8 @@ export function AgentDialog({
           teams: assignedTeamIds,
           labels: updatedLabels,
           scope,
+          ...(isInternalAgent &&
+            !isBuiltIn && { sharedMemoryWriteEnabled }),
           ...(showSecurity && { considerContextUntrusted }),
           ...(agentType === "mcp_gateway" && {
             passthroughHeaders:
@@ -1174,6 +1201,7 @@ export function AgentDialog({
     deleteAgent,
     toolExposureMode,
     accessAllTools,
+    sharedMemoryWriteEnabled,
     supportsEnvironment,
   ]);
 
@@ -1948,6 +1976,39 @@ export function AgentDialog({
                       hasNoAvailableTeams={hasNoAvailableTeams}
                       showTeamRequired={!isAdmin}
                     />
+                  )}
+
+                  {isInternalAgent && !isBuiltIn && (
+                    <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+                      <div className="space-y-1">
+                        <h4 className="text-sm font-medium">Durable memory</h4>
+                        <p className="text-sm text-muted-foreground">
+                          {getAgentMemoryScopeHelp(scope)}
+                        </p>
+                      </div>
+                      {scope !== "personal" && (
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="space-y-0.5">
+                            <Label
+                              htmlFor="shared-memory-write-enabled"
+                              className="text-sm font-medium cursor-pointer"
+                            >
+                              Allow shared memory writes
+                            </Label>
+                            <p className="text-xs text-muted-foreground">
+                              Lets this agent save shared facts during chat when
+                              context is trusted. Personal memory writes are not
+                              controlled by this switch.
+                            </p>
+                          </div>
+                          <Switch
+                            id="shared-memory-write-enabled"
+                            checked={sharedMemoryWriteEnabled}
+                            onCheckedChange={setSharedMemoryWriteEnabled}
+                          />
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {/* LLM Configuration (Agent and Built-in) */}

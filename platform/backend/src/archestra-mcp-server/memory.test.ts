@@ -9,6 +9,7 @@ import db, { schema } from "@/database";
 import { OrganizationModel } from "@/models";
 import { beforeEach, describe, expect, test } from "@/test";
 import type { Agent, InsertMemory } from "@/types";
+import { MAX_CORE_ITEMS_PER_SCOPE } from "./memory";
 import { type ArchestraContext, executeArchestraTool } from ".";
 
 const t = (name: string) =>
@@ -84,6 +85,7 @@ describe("memory tool execution", () => {
   });
 
   test("team memory is visible to a member but not a non-member", async ({
+    makeAgent,
     makeTeam,
     makeTeamMember,
     makeUser,
@@ -97,6 +99,13 @@ describe("memory tool execution", () => {
     const team = await makeTeam(organizationId, userId);
     await makeTeamMember(team.id, member.id);
 
+    const teamAgent = await makeAgent({
+      organizationId,
+      scope: "team",
+      teams: [team.id],
+      name: "Team Memory Agent",
+    });
+
     await seedMemory({
       organizationId,
       visibility: "team",
@@ -108,13 +117,13 @@ describe("memory tool execution", () => {
     });
 
     const memberContext: ArchestraContext = {
-      agent: { id: agent.id, name: agent.name },
+      agent: { id: teamAgent.id, name: teamAgent.name },
       organizationId,
       userId: member.id,
       contextIsTrusted: true,
     };
     const outsiderContext: ArchestraContext = {
-      agent: { id: agent.id, name: agent.name },
+      agent: { id: teamAgent.id, name: teamAgent.name },
       organizationId,
       userId: outsider.id,
       contextIsTrusted: true,
@@ -192,18 +201,29 @@ describe("memory tool execution", () => {
     expect(rowCount).toBe(0);
   });
 
-  test("duplicate create results in exactly one row", async () => {
+  test("duplicate create results in exactly one row", async ({ makeAgent }) => {
+    const personalAgent = await makeAgent({
+      organizationId,
+      scope: "personal",
+      authorId: userId,
+    });
+    const personalContext: ArchestraContext = {
+      agent: { id: personalAgent.id, name: personalAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
     const args = { command: "create" as const, content: "duplicate-me" };
 
     const first = await executeArchestraTool(
       t(TOOL_MEMORY_SHORT_NAME),
       args,
-      context,
+      personalContext,
     );
     const second = await executeArchestraTool(
       t(TOOL_MEMORY_SHORT_NAME),
       args,
-      context,
+      personalContext,
     );
 
     expect(first.isError).toBeFalsy();
@@ -283,7 +303,9 @@ describe("memory tool execution", () => {
     expect(stillThere).toHaveLength(1);
   });
 
-  test("update to duplicate content returns controlled error", async () => {
+  test("personal agent update to duplicate content returns controlled error", async ({
+    makeAgent,
+  }) => {
     const first = await seedMemory({
       organizationId,
       visibility: "personal",
@@ -302,11 +324,22 @@ describe("memory tool execution", () => {
       tier: "core",
       createdBy: userId,
     });
+    const personalAgent = await makeAgent({
+      organizationId,
+      scope: "personal",
+      authorId: userId,
+    });
+    const personalContext: ArchestraContext = {
+      agent: { id: personalAgent.id, name: personalAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
 
     const result = await executeArchestraTool(
       t(TOOL_MEMORY_SHORT_NAME),
       { command: "update", id: second.id, content: "existing-content" },
-      context,
+      personalContext,
     );
 
     expect(result.isError).toBeTruthy();
@@ -370,12 +403,21 @@ describe("memory tool execution", () => {
     expect(rowCount).toBe(0);
   });
 
-  test("view by id does not expose team or org memories", async ({
+  test("view by id exposes org memory for org-targeted agents only", async ({
     makeTeam,
     makeTeamMember,
+    makeAgent,
   }) => {
     const team = await makeTeam(organizationId, userId);
     await makeTeamMember(team.id, userId);
+
+    const orgAgent = await makeAgent({ organizationId, scope: "org" });
+    const orgContext: ArchestraContext = {
+      agent: { id: orgAgent.id, name: orgAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
 
     const teamMemory = await seedMemory({
       organizationId,
@@ -391,7 +433,7 @@ describe("memory tool execution", () => {
       visibility: "org",
       userId: null,
       teamId: null,
-      content: "org-view-by-id-hidden",
+      content: "org-view-by-id-visible",
       tier: "core",
       createdBy: userId,
     });
@@ -399,20 +441,20 @@ describe("memory tool execution", () => {
     const teamView = await executeArchestraTool(
       t(TOOL_MEMORY_SHORT_NAME),
       { command: "view", id: teamMemory.id },
-      context,
+      orgContext,
     );
     const orgView = await executeArchestraTool(
       t(TOOL_MEMORY_SHORT_NAME),
       { command: "view", id: orgMemory.id },
-      context,
+      orgContext,
     );
 
     expect(teamView.isError).toBeFalsy();
     expect(orgView.isError).toBeFalsy();
     expect(memoriesFrom(teamView)).toEqual([]);
-    expect(memoriesFrom(orgView)).toEqual([]);
+    expect(memoriesFrom(orgView)).toHaveLength(1);
+    expect(memoriesFrom(orgView)[0].content).toBe("org-view-by-id-visible");
     expect(textOf(teamView)).toContain("No matching memory found");
-    expect(textOf(orgView)).toContain("No matching memory found");
   });
 
   test("read-only memory permission can search but cannot update or delete", async ({
@@ -505,5 +547,459 @@ describe("memory tool execution", () => {
     ).rejects.toMatchObject({
       message: expect.stringContaining("No tool named"),
     });
+  });
+
+  test("personal agent writes caller personal memory", async ({
+    makeAgent,
+  }) => {
+    const personalAgent = await makeAgent({
+      organizationId,
+      scope: "personal",
+      authorId: userId,
+    });
+    const personalContext: ArchestraContext = {
+      agent: { id: personalAgent.id, name: personalAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
+
+    const result = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "create", content: "personal-agent-save" },
+      personalContext,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const [row] = await db
+      .select()
+      .from(schema.memoriesTable)
+      .where(eq(schema.memoriesTable.content, "personal-agent-save"));
+    expect(row?.visibility).toBe("personal");
+    expect(row?.userId).toBe(userId);
+    expect(row?.writtenByAgentId).toBe(personalAgent.id);
+    expect(row?.sourceKind).toBe("agent");
+    expect(row?.createdBy).toBe(userId);
+  });
+
+  test("org agent writes org memory with agent provenance", async ({
+    makeAgent,
+  }) => {
+    const orgAgent = await makeAgent({ organizationId, scope: "org" });
+    const orgContext: ArchestraContext = {
+      agent: { id: orgAgent.id, name: orgAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
+
+    const result = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "create", content: "org-agent-save" },
+      orgContext,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const [row] = await db
+      .select()
+      .from(schema.memoriesTable)
+      .where(eq(schema.memoriesTable.content, "org-agent-save"));
+    expect(row?.visibility).toBe("org");
+    expect(row?.writtenByAgentId).toBe(orgAgent.id);
+    expect(row?.sourceKind).toBe("agent");
+  });
+
+  test("team agent fan-out writes one row per assigned team", async ({
+    makeAgent,
+    makeTeam,
+  }) => {
+    const teamA = await makeTeam(organizationId, userId);
+    const teamB = await makeTeam(organizationId, userId);
+    const teamAgent = await makeAgent({
+      organizationId,
+      scope: "team",
+      teams: [teamA.id, teamB.id],
+    });
+    const teamContext: ArchestraContext = {
+      agent: { id: teamAgent.id, name: teamAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
+
+    const result = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "create", content: "team-fanout-save" },
+      teamContext,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const rows = await db
+      .select()
+      .from(schema.memoriesTable)
+      .where(eq(schema.memoriesTable.content, "team-fanout-save"));
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.teamId).sort()).toEqual(
+      [teamA.id, teamB.id].sort(),
+    );
+    expect(rows.every((row) => row.sourceKind === "agent")).toBe(true);
+  });
+
+  test("team agent with no teams fails gracefully on create", async ({
+    makeAgent,
+  }) => {
+    const teamAgent = await makeAgent({
+      organizationId,
+      scope: "team",
+      teams: [],
+    });
+    const teamContext: ArchestraContext = {
+      agent: { id: teamAgent.id, name: teamAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
+
+    const result = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "create", content: "team-empty-save" },
+      teamContext,
+    );
+
+    expect(result.isError).toBeTruthy();
+    expect(textOf(result)).toContain("no teams assigned");
+  });
+
+  test("sharedMemoryWriteEnabled=false blocks org writes", async ({
+    makeAgent,
+  }) => {
+    const orgAgent = await makeAgent({
+      organizationId,
+      scope: "org",
+      sharedMemoryWriteEnabled: false,
+    });
+    const orgContext: ArchestraContext = {
+      agent: { id: orgAgent.id, name: orgAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
+
+    const result = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "create", content: "blocked-org-save" },
+      orgContext,
+    );
+
+    expect(result.isError).toBeTruthy();
+    expect(textOf(result)).toContain("Shared memory writes are disabled");
+
+    const [{ value: rowCount }] = await db
+      .select({ value: count() })
+      .from(schema.memoriesTable)
+      .where(eq(schema.memoriesTable.content, "blocked-org-save"));
+    expect(rowCount).toBe(0);
+  });
+
+  test("sharedMemoryWriteEnabled=false blocks org memory update and delete", async ({
+    makeAgent,
+  }) => {
+    const orgAgent = await makeAgent({
+      organizationId,
+      scope: "org",
+      sharedMemoryWriteEnabled: false,
+    });
+    const orgContext: ArchestraContext = {
+      agent: { id: orgAgent.id, name: orgAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
+
+    const memory = await seedMemory({
+      organizationId,
+      visibility: "org",
+      userId: null,
+      teamId: null,
+      content: "blocked-org-update-target",
+      tier: "core",
+      createdBy: userId,
+    });
+
+    const updateResult = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      {
+        command: "update",
+        id: memory.id,
+        content: "blocked-org-update-content",
+      },
+      orgContext,
+    );
+    expect(updateResult.isError).toBeTruthy();
+    expect(textOf(updateResult)).toContain("Shared memory writes are disabled");
+
+    const deleteResult = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "delete", id: memory.id },
+      orgContext,
+    );
+    expect(deleteResult.isError).toBeTruthy();
+    expect(textOf(deleteResult)).toContain("Shared memory writes are disabled");
+
+    const [unchanged] = await db
+      .select()
+      .from(schema.memoriesTable)
+      .where(eq(schema.memoriesTable.id, memory.id));
+    expect(unchanged?.content).toBe("blocked-org-update-target");
+  });
+
+  test("sharedMemoryWriteEnabled=false still allows personal memory update", async ({
+    makeAgent,
+  }) => {
+    const personalAgent = await makeAgent({
+      organizationId,
+      scope: "personal",
+      authorId: userId,
+      sharedMemoryWriteEnabled: false,
+    });
+    const personalContext: ArchestraContext = {
+      agent: { id: personalAgent.id, name: personalAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
+
+    const memory = await seedMemory({
+      organizationId,
+      visibility: "personal",
+      userId,
+      teamId: null,
+      content: "personal-update-allowed",
+      tier: "core",
+      createdBy: userId,
+    });
+
+    const updateResult = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      {
+        command: "update",
+        id: memory.id,
+        content: "personal-update-allowed-revised",
+      },
+      personalContext,
+    );
+
+    expect(updateResult.isError).toBeFalsy();
+    const [updated] = await db
+      .select()
+      .from(schema.memoriesTable)
+      .where(eq(schema.memoriesTable.id, memory.id));
+    expect(updated?.content).toBe("personal-update-allowed-revised");
+  });
+
+  test("org agent cannot update or delete caller personal memory", async ({
+    makeAgent,
+  }) => {
+    const orgAgent = await makeAgent({
+      organizationId,
+      scope: "org",
+    });
+    const orgContext: ArchestraContext = {
+      agent: { id: orgAgent.id, name: orgAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
+
+    const memory = await seedMemory({
+      organizationId,
+      visibility: "personal",
+      userId,
+      teamId: null,
+      content: "personal-update-denied-through-org",
+      tier: "core",
+      createdBy: userId,
+    });
+
+    const updateResult = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      {
+        command: "update",
+        id: memory.id,
+        content: "should-not-update-personal-through-org",
+      },
+      orgContext,
+    );
+    expect(updateResult.isError).toBeTruthy();
+    expect(textOf(updateResult)).toContain("do not have permission to update");
+
+    const deleteResult = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "delete", id: memory.id },
+      orgContext,
+    );
+    expect(deleteResult.isError).toBeTruthy();
+    expect(textOf(deleteResult)).toContain("do not have permission to delete");
+
+    const [unchanged] = await db
+      .select()
+      .from(schema.memoriesTable)
+      .where(eq(schema.memoriesTable.id, memory.id));
+    expect(unchanged?.content).toBe("personal-update-denied-through-org");
+  });
+
+  test("team fan-out rolls back all rows when one team is not writable", async ({
+    makeAgent,
+    makeTeam,
+    makeTeamMember,
+    makeUser,
+    makeMember,
+    makeCustomRole,
+  }) => {
+    const teamA = await makeTeam(organizationId, userId);
+    const teamB = await makeTeam(organizationId, userId);
+
+    const teamAdminUser = await makeUser();
+    const teamAdminRole = await makeCustomRole(organizationId, {
+      permission: {
+        memory: ["read", "create", "update", "delete", "team-admin"],
+      },
+    });
+    await makeMember(teamAdminUser.id, organizationId, {
+      role: teamAdminRole.role,
+    });
+    await makeTeamMember(teamA.id, teamAdminUser.id);
+
+    const teamAgent = await makeAgent({
+      organizationId,
+      scope: "team",
+      teams: [teamA.id, teamB.id],
+    });
+    const teamAdminContext: ArchestraContext = {
+      agent: { id: teamAgent.id, name: teamAgent.name },
+      organizationId,
+      userId: teamAdminUser.id,
+      contextIsTrusted: true,
+    };
+
+    const result = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "create", content: "partial-fanout-blocked" },
+      teamAdminContext,
+    );
+
+    expect(result.isError).toBeTruthy();
+
+    const [{ value: rowCount }] = await db
+      .select({ value: count() })
+      .from(schema.memoriesTable)
+      .where(eq(schema.memoriesTable.content, "partial-fanout-blocked"));
+    expect(rowCount).toBe(0);
+  });
+
+  test("team fan-out treats duplicate rows as idempotent before scope limits", async ({
+    makeAgent,
+    makeTeam,
+  }) => {
+    const teamA = await makeTeam(organizationId, userId);
+    const teamB = await makeTeam(organizationId, userId);
+    const teamAgent = await makeAgent({
+      organizationId,
+      scope: "team",
+      teams: [teamA.id, teamB.id],
+    });
+    const teamContext: ArchestraContext = {
+      agent: { id: teamAgent.id, name: teamAgent.name },
+      organizationId,
+      userId,
+      contextIsTrusted: true,
+    };
+
+    await seedMemory({
+      organizationId,
+      visibility: "team",
+      userId: null,
+      teamId: teamA.id,
+      content: "team-capacity-duplicate-ok",
+      tier: "core",
+      createdBy: userId,
+    });
+    for (let i = 1; i < MAX_CORE_ITEMS_PER_SCOPE; i += 1) {
+      await seedMemory({
+        organizationId,
+        visibility: "team",
+        userId: null,
+        teamId: teamA.id,
+        content: `team-a-fill-${i}`,
+        tier: "core",
+        createdBy: userId,
+      });
+    }
+
+    const result = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "create", content: "team-capacity-duplicate-ok" },
+      teamContext,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const rows = await db
+      .select()
+      .from(schema.memoriesTable)
+      .where(eq(schema.memoriesTable.content, "team-capacity-duplicate-ok"));
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.teamId).sort()).toEqual(
+      [teamA.id, teamB.id].sort(),
+    );
+  });
+
+  test("memory_access_level=personal blocks org search through org agent", async ({
+    makeUser,
+    makeMember,
+    makeAgent,
+  }) => {
+    const restrictedUser = await makeUser();
+    const memberRow = await makeMember(restrictedUser.id, organizationId);
+    await db
+      .update(schema.membersTable)
+      .set({ memoryAccessLevel: "personal" })
+      .where(eq(schema.membersTable.id, memberRow.id));
+
+    const orgAgent = await makeAgent({ organizationId, scope: "org" });
+    await seedMemory({
+      organizationId,
+      visibility: "org",
+      userId: null,
+      teamId: null,
+      content: "org-ceiling-hidden",
+      tier: "core",
+      createdBy: userId,
+    });
+    await seedMemory({
+      organizationId,
+      visibility: "personal",
+      userId: restrictedUser.id,
+      teamId: null,
+      content: "personal-ceiling-visible",
+      tier: "core",
+      createdBy: restrictedUser.id,
+    });
+
+    const restrictedContext: ArchestraContext = {
+      agent: { id: orgAgent.id, name: orgAgent.name },
+      organizationId,
+      userId: restrictedUser.id,
+      contextIsTrusted: true,
+    };
+
+    const result = await executeArchestraTool(
+      t(TOOL_MEMORY_SHORT_NAME),
+      { command: "search", query: "ceiling" },
+      restrictedContext,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(memoriesFrom(result)).toHaveLength(1);
+    expect(memoriesFrom(result)[0].content).toBe("personal-ceiling-visible");
   });
 });

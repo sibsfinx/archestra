@@ -3,6 +3,7 @@
 import {
   Archive,
   Brain,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Pencil,
@@ -19,6 +20,11 @@ import { TableRowActions } from "@/components/table-row-actions";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { DialogForm, DialogStickyFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -45,9 +51,12 @@ import {
   type MemoryEntry,
   type MemoryTier,
   type MemoryVisibility,
+  highestMemoryTabForAccessLevel,
+  memoryVisibilitiesForAccessLevel,
   useCreateMemory,
   useDeleteMemory,
   useMemories,
+  useMemoryAccessLevel,
   useUpdateMemory,
 } from "@/lib/memory.query";
 import {
@@ -67,9 +76,24 @@ import {
 type MemoryTab = MemoryVisibility;
 
 const MEMORY_CAP_HELP =
+  "Agents automatically save facts during chat at the agent's scope. Use this page to browse, correct, archive, or delete memories. " +
+  "Manual entry is a questionable fallback — prefer agent-authored rows. " +
   `Store up to ${CORE_CAP_PER_SCOPE} core memories per scope. ` +
-  `Agents inject up to ${MEMORY_INJECTION_TOTAL_CAP} core memories total across personal, team, and org scopes. ` +
-  "Archival memories stay searchable in settings but are not injected.";
+  `Agents inject up to ${MEMORY_INJECTION_TOTAL_CAP} core memories total across scopes you can access. ` +
+  "Archival memories stay searchable here but are not injected.";
+
+function sourceLabel(memory: MemoryEntry): string {
+  return memory.sourceKind === "agent" ? "Agent" : "Manual (questionable)";
+}
+
+function SourceBadge({ memory }: { memory: MemoryEntry }) {
+  const isAgent = memory.sourceKind === "agent";
+  return (
+    <Badge variant={isAgent ? "default" : "outline"} className="whitespace-nowrap">
+      {sourceLabel(memory)}
+    </Badge>
+  );
+}
 
 function tierLabel(tier: MemoryTier): string {
   return tier === "core" ? "Core" : "Archival";
@@ -296,9 +320,10 @@ function MemoryScopePanel({
   const { data: canReadMemories, isPending: isCheckingPermissions } =
     useHasPermissions({ memory: ["read"] });
   const { data: isMemoryAdmin } = useHasPermissions({ memory: ["admin"] });
-  const { data: memories = [], isPending } = useMemories(visibility, {
+  const { data: memoriesResult, isPending } = useMemories(visibility, {
     enabled: memoryOrgEnabled,
   });
+  const memories = memoriesResult?.memories ?? [];
   const { data: myTeams = [] } = useMyTeams({
     enabled: visibility === "team" && !isMemoryAdmin,
   });
@@ -322,6 +347,8 @@ function MemoryScopePanel({
   const [memoryToEdit, setMemoryToEdit] = useState<MemoryEntry | null>(null);
   const [editContent, setEditContent] = useState("");
   const [editTier, setEditTier] = useState<MemoryTier>("core");
+  const [manualAddOpen, setManualAddOpen] = useState(false);
+  const [teamOrgAddOpen, setTeamOrgAddOpen] = useState(false);
 
   const teamNameById = useMemo(
     () => new Map(teams.map((team) => [team.id, team.name])),
@@ -403,8 +430,13 @@ function MemoryScopePanel({
   };
 
   const showTeamColumn = visibility === "team" && teams.length > 1;
+  const showAuthorColumn = visibility === "team" || visibility === "org";
   const showActions = writeAccess.canUpdate || writeAccess.canDelete;
-  const emptyColSpan = 3 + (showTeamColumn ? 1 : 0) + (showActions ? 1 : 0);
+  const emptyColSpan =
+    5 +
+    (showTeamColumn ? 1 : 0) +
+    (showAuthorColumn ? 1 : 0) +
+    (showActions ? 1 : 0);
 
   if (!isCheckingPermissions && !canReadMemories) {
     return (
@@ -480,40 +512,110 @@ function MemoryScopePanel({
         coreCount={browse.coreCount}
       />
 
-      {writeAccess.canCreate && (
-        <div className="space-y-3 rounded-lg border p-4">
-          <div className="flex gap-2">
-            <Input
-              value={newContent}
-              onChange={(event) => setNewContent(event.target.value)}
-              placeholder="Add a memory fact..."
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void handleCreate();
-                }
-              }}
-            />
-            <Button
-              type="button"
-              onClick={() => void handleCreate()}
-              disabled={
-                createMemory.isPending ||
-                !newContent.trim() ||
-                (visibility === "team" && !teamId)
-              }
-            >
-              <Plus className="h-4 w-4" />
-              Add
+      {writeAccess.canCreate && visibility === "personal" && (
+        <Collapsible open={manualAddOpen} onOpenChange={setManualAddOpen}>
+          <CollapsibleTrigger asChild>
+            <Button type="button" variant="ghost" size="sm" className="px-0">
+              <ChevronDown
+                className={`mr-2 h-4 w-4 transition-transform ${manualAddOpen ? "rotate-180" : ""}`}
+              />
+              Add manually
             </Button>
-          </div>
-          <MemoryTierSelect
-            id="new-memory-tier"
-            value={newTier}
-            onChange={setNewTier}
-          />
-        </div>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="space-y-3 rounded-lg border p-4">
+            <p className="text-sm text-muted-foreground">
+              Manual personal entries are questionable — agents normally save
+              facts during chat. Use manual add only as a fallback when chat
+              context is untrusted or you need a one-off correction.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                value={newContent}
+                onChange={(event) => setNewContent(event.target.value)}
+                placeholder="Add a memory fact..."
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleCreate();
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void handleCreate()}
+                disabled={createMemory.isPending || !newContent.trim()}
+              >
+                <Plus className="h-4 w-4" />
+                Add
+              </Button>
+            </div>
+            <MemoryTierSelect
+              id="new-memory-tier"
+              value={newTier}
+              onChange={setNewTier}
+            />
+          </CollapsibleContent>
+        </Collapsible>
       )}
+
+      {writeAccess.canCreate &&
+        (visibility === "team" || visibility === "org") && (
+          <div>
+            {!teamOrgAddOpen ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setTeamOrgAddOpen(true)}
+                disabled={visibility === "team" && !teamId}
+              >
+                <Plus className="h-4 w-4" />
+                Add {visibility === "team" ? "team" : "organization"} memory
+              </Button>
+            ) : (
+              <div className="space-y-3 rounded-lg border p-4">
+                <p className="text-sm text-muted-foreground">
+                  Manual {visibility === "team" ? "team" : "organization"}{" "}
+                  entries are questionable — agents save shared facts during chat
+                  when scope and trusted context allow. Prefer correcting
+                  agent-authored rows in the list below.
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    value={newContent}
+                    onChange={(event) => setNewContent(event.target.value)}
+                    placeholder="Add a memory fact..."
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void handleCreate();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void handleCreate()}
+                    disabled={
+                      createMemory.isPending ||
+                      !newContent.trim() ||
+                      (visibility === "team" && !teamId)
+                    }
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add
+                  </Button>
+                </div>
+                <MemoryTierSelect
+                  id="new-memory-tier"
+                  value={newTier}
+                  onChange={setNewTier}
+                />
+              </div>
+            )}
+          </div>
+        )}
 
       <LoadingWrapper
         isPending={isPending}
@@ -524,7 +626,10 @@ function MemoryScopePanel({
             <TableRow>
               <TableHead>Fact</TableHead>
               <TableHead className="w-[100px]">Tier</TableHead>
+              <TableHead className="w-[140px]">Source</TableHead>
               {showTeamColumn && <TableHead>Team</TableHead>}
+              {showAuthorColumn && <TableHead>Author</TableHead>}
+              <TableHead>Created</TableHead>
               <TableHead>Updated</TableHead>
               {showActions && (
                 <TableHead className="w-[100px]">Actions</TableHead>
@@ -556,6 +661,9 @@ function MemoryScopePanel({
                       {tierLabel(memory.tier)}
                     </Badge>
                   </TableCell>
+                  <TableCell>
+                    <SourceBadge memory={memory} />
+                  </TableCell>
                   {showTeamColumn && (
                     <TableCell>
                       {memory.teamId
@@ -563,6 +671,14 @@ function MemoryScopePanel({
                         : "—"}
                     </TableCell>
                   )}
+                  {showAuthorColumn && (
+                    <TableCell className="text-muted-foreground">
+                      {memory.createdByName ?? "Unknown"}
+                    </TableCell>
+                  )}
+                  <TableCell className="text-muted-foreground">
+                    {formatRelativeTimeFromNow(memory.createdAt)}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">
                     {formatRelativeTimeFromNow(memory.updatedAt)}
                   </TableCell>
@@ -740,6 +856,26 @@ export default function MemorySettingsPage() {
     useHasPermissions({ memory: ["admin"] });
   const { data: canReadMemories, isPending: isCheckingRead } =
     useHasPermissions({ memory: ["read"] });
+  const { data: memoryAccessLevel, isPending: isAccessLevelPending } =
+    useMemoryAccessLevel({
+      enabled: memoryGloballyEnabled && !!canReadMemories,
+    });
+
+  const allowedTabs = useMemo(
+    () =>
+      memoryAccessLevel
+        ? memoryVisibilitiesForAccessLevel(memoryAccessLevel)
+        : (["personal", "team", "org"] as MemoryTab[]),
+    [memoryAccessLevel],
+  );
+
+  useEffect(() => {
+    if (!memoryAccessLevel) return;
+    const preferred = highestMemoryTabForAccessLevel(memoryAccessLevel);
+    setActiveTab((current) =>
+      allowedTabs.includes(current) ? current : preferred,
+    );
+  }, [allowedTabs, memoryAccessLevel]);
 
   if (!memoryGloballyEnabled) {
     return (
@@ -752,7 +888,12 @@ export default function MemorySettingsPage() {
     );
   }
 
-  if (isCheckingMemoryAdmin || isCheckingRead || isOrganizationPending) {
+  if (
+    isCheckingMemoryAdmin ||
+    isCheckingRead ||
+    isOrganizationPending ||
+    isAccessLevelPending
+  ) {
     return <LoadingSpinner />;
   }
 
@@ -793,9 +934,15 @@ export default function MemorySettingsPage() {
         className="space-y-6"
       >
         <TabsList>
-          <TabsTrigger value="personal">Personal</TabsTrigger>
-          <TabsTrigger value="team">Team</TabsTrigger>
-          <TabsTrigger value="org">Org</TabsTrigger>
+          {allowedTabs.includes("personal") && (
+            <TabsTrigger value="personal">Personal</TabsTrigger>
+          )}
+          {allowedTabs.includes("team") && (
+            <TabsTrigger value="team">Team</TabsTrigger>
+          )}
+          {allowedTabs.includes("org") && (
+            <TabsTrigger value="org">Org</TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="personal">

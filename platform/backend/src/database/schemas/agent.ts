@@ -13,6 +13,7 @@ import type {
   AgentScope,
   AgentType,
   BuiltInAgentConfig,
+  MemoryTargetMode,
   ToolExposureMode,
 } from "@/types/agent";
 import environmentsTable from "./environment";
@@ -140,6 +141,17 @@ const agentsTable = softDeletablePgTable(
      * per-agent flag is the sole gate for dynamic tool access.
      */
     accessAllTools: boolean("access_all_tools").notNull().default(false),
+
+    /**
+     * Where agent chat/MCP memory writes land (`personal` / `team` / `org`).
+     * Null falls back to `scope` at runtime.
+     */
+    memoryTargetMode: text("memory_target_mode").$type<MemoryTargetMode>(),
+
+    /** When false, MCP writes may only create personal memories for the caller. */
+    sharedMemoryWriteEnabled: boolean("shared_memory_write_enabled")
+      .notNull()
+      .default(true),
 
     /** JSONB config for built-in agents (null for user-created agents) */
     builtInAgentConfig: jsonb(

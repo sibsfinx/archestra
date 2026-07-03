@@ -1,12 +1,24 @@
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { type Permission, TOOL_MEMORY_SHORT_NAME } from "@archestra/shared";
-import { and, desc, eq, ilike, inArray, ne, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, ne } from "drizzle-orm";
 import { z } from "zod";
 import config from "@/config";
-import db, { schema } from "@/database";
+import db, { schema, type Transaction } from "@/database";
 import logger from "@/logging";
+import {
+  getMemoryPermissionChecker,
+  requireMemoryModifyPermission,
+} from "@/auth/memory-permissions";
 import { MemoryModel, TeamModel } from "@/models";
+import AgentTeamModel from "@/models/agent-team";
+import {
+  buildAgentAwareMemoryReadCondition,
+  loadAgentMemoryConfig,
+  resolveAgentMemoryTargetMode,
+  resolveMemoryAccessLevel,
+} from "@/models/memory-scope-access";
 import OrganizationModel from "@/models/organization";
-import type { Memory } from "@/types";
+import type { Memory, MemoryVisibility } from "@/types";
 import { isUniqueConstraintError } from "@/utils/db";
 import {
   defineArchestraTool,
@@ -47,41 +59,28 @@ type UserContext = {
   userId: string;
 };
 
+type AgentMemoryContext = UserContext & {
+  agentId: string;
+};
+
 function requireUserContext(context: ArchestraContext): UserContext | null {
   if (!context.organizationId || !context.userId) return null;
   return { organizationId: context.organizationId, userId: context.userId };
 }
 
-function escapeLikePattern(value: string): string {
-  return value.replace(/[%_\\]/g, "\\$&");
+function resolveAgentMemoryContext(
+  context: ArchestraContext,
+): AgentMemoryContext | null {
+  const userContext = requireUserContext(context);
+  if (!userContext) return null;
+  return {
+    ...userContext,
+    agentId: context.agentId ?? context.agent.id,
+  };
 }
 
-function buildReadScopeCondition(params: {
-  organizationId: string;
-  userId: string;
-  teamIds: string[];
-}) {
-  const visibilityConditions = [
-    and(
-      eq(schema.memoriesTable.visibility, "personal"),
-      eq(schema.memoriesTable.userId, params.userId),
-    ),
-    eq(schema.memoriesTable.visibility, "org"),
-  ];
-
-  if (params.teamIds.length > 0) {
-    visibilityConditions.push(
-      and(
-        eq(schema.memoriesTable.visibility, "team"),
-        inArray(schema.memoriesTable.teamId, params.teamIds),
-      ),
-    );
-  }
-
-  return and(
-    eq(schema.memoriesTable.organizationId, params.organizationId),
-    or(...visibilityConditions),
-  );
+function escapeLikePattern(value: string): string {
+  return value.replace(/[%_\\]/g, "\\$&");
 }
 
 function formatMemoryAuditSnapshot(memory: Memory) {
@@ -130,42 +129,136 @@ async function requireMemoryWritePermission(
   return null;
 }
 
-async function findPersonalDuplicate(
-  ctx: UserContext,
-  content: string,
-): Promise<Memory | null> {
-  const [existing] = await db
-    .select()
-    .from(schema.memoriesTable)
-    .where(
-      and(
-        eq(schema.memoriesTable.organizationId, ctx.organizationId),
-        eq(schema.memoriesTable.userId, ctx.userId),
-        eq(schema.memoriesTable.visibility, "personal"),
-        eq(schema.memoriesTable.content, content),
-      ),
-    )
-    .limit(1);
-  return existing ?? null;
+function buildDuplicateCondition(params: {
+  organizationId: string;
+  visibility: MemoryVisibility;
+  userId: string | null;
+  teamId: string | null;
+  content: string;
+}) {
+  const base = [
+    eq(schema.memoriesTable.organizationId, params.organizationId),
+    eq(schema.memoriesTable.visibility, params.visibility),
+    eq(schema.memoriesTable.content, params.content),
+  ];
+
+  if (params.visibility === "personal") {
+    return and(...base, eq(schema.memoriesTable.userId, params.userId!));
+  }
+  if (params.visibility === "team") {
+    return and(...base, eq(schema.memoriesTable.teamId, params.teamId!));
+  }
+  return and(...base);
 }
 
-async function viewPersonalMemories(
-  ctx: UserContext,
+async function countCoreMemoriesInScope(
+  params: {
+    organizationId: string;
+    visibility: MemoryVisibility;
+    userId: string | null;
+    teamId: string | null;
+  },
+  tx?: Transaction,
+): Promise<number> {
+  const conditions = [
+    eq(schema.memoriesTable.organizationId, params.organizationId),
+    eq(schema.memoriesTable.visibility, params.visibility),
+    eq(schema.memoriesTable.tier, "core"),
+  ];
+
+  if (params.visibility === "personal") {
+    conditions.push(eq(schema.memoriesTable.userId, params.userId!));
+  } else if (params.visibility === "team") {
+    conditions.push(eq(schema.memoriesTable.teamId, params.teamId!));
+  }
+
+  const dbOrTx = tx ?? db;
+  const [{ value }] = await dbOrTx
+    .select({ value: count() })
+    .from(schema.memoriesTable)
+    .where(and(...conditions));
+
+  return value;
+}
+
+async function denyWhenSharedMemoryWriteDisabled(
+  ctx: AgentMemoryContext,
+  visibility: MemoryVisibility,
+): Promise<ReturnType<typeof errorResult> | null> {
+  if (visibility === "personal") {
+    return null;
+  }
+
+  const agentConfig = await loadAgentMemoryConfig(ctx.agentId);
+  if (!agentConfig || agentConfig.organizationId !== ctx.organizationId) {
+    return errorResult("Agent not found.");
+  }
+  if (!agentConfig.sharedMemoryWriteEnabled) {
+    return errorResult("Shared memory writes are disabled for this agent.");
+  }
+  return null;
+}
+
+async function buildAgentReadScope(params: AgentMemoryContext) {
+  const [teamIds, accessLevel, agentConfig, agentTeamIds] = await Promise.all([
+    getReadableTeamIds(params.userId),
+    resolveMemoryAccessLevel(params.userId, params.organizationId),
+    loadAgentMemoryConfig(params.agentId),
+    AgentTeamModel.getTeamsForAgent(params.agentId),
+  ]);
+
+  if (!agentConfig || agentConfig.organizationId !== params.organizationId) {
+    return null;
+  }
+
+  const memoryTargetMode = resolveAgentMemoryTargetMode(agentConfig);
+  const scopeCondition = buildAgentAwareMemoryReadCondition({
+    organizationId: params.organizationId,
+    userId: params.userId,
+    userTeamIds: teamIds,
+    agentTeamIds,
+    accessLevel,
+    memoryTargetMode,
+  });
+
+  return {
+    teamIds,
+    accessLevel,
+    agentConfig,
+    agentTeamIds,
+    memoryTargetMode,
+    scopeCondition,
+  };
+}
+
+async function viewMemories(
+  ctx: AgentMemoryContext,
   args: z.infer<typeof MemoryToolArgsSchema>,
 ) {
+  const readScope = await buildAgentReadScope(ctx);
+  if (!readScope?.scopeCondition) {
+    return structuredSuccessResult(
+      { memories: [] },
+      args.id ? "No matching memory found." : JSON.stringify({ memories: [] }, null, 2),
+    );
+  }
+
   if (args.id) {
-    const memory = await MemoryModel.getById(args.id);
-    if (
-      !memory ||
-      memory.organizationId !== ctx.organizationId ||
-      memory.visibility !== "personal" ||
-      memory.userId !== ctx.userId
-    ) {
+    const [memory] = await db
+      .select()
+      .from(schema.memoriesTable)
+      .where(
+        and(readScope.scopeCondition, eq(schema.memoriesTable.id, args.id)),
+      )
+      .limit(1);
+
+    if (!memory) {
       return structuredSuccessResult(
         { memories: [] },
         "No matching memory found.",
       );
     }
+
     const formatted = formatMemoryForChat(memory);
     return structuredSuccessResult(
       { memories: [formatted] },
@@ -173,11 +266,12 @@ async function viewPersonalMemories(
     );
   }
 
-  const memories = await MemoryModel.listReadable({
+  const memories = await MemoryModel.listReadableForAgentContext({
     organizationId: ctx.organizationId,
     userId: ctx.userId,
-    teamIds: await getReadableTeamIds(ctx.userId),
-    visibility: "personal",
+    teamIds: readScope.teamIds,
+    agentId: ctx.agentId,
+    accessLevel: readScope.accessLevel,
   });
 
   const formatted = memories.map(formatMemoryForChat);
@@ -188,7 +282,7 @@ async function viewPersonalMemories(
 }
 
 async function searchReadableMemories(
-  ctx: UserContext,
+  ctx: AgentMemoryContext,
   args: z.infer<typeof MemoryToolArgsSchema>,
 ) {
   const query = args.query?.trim();
@@ -196,19 +290,24 @@ async function searchReadableMemories(
     return errorResult("search requires a non-empty query.");
   }
 
-  const teamIds = await getReadableTeamIds(ctx.userId);
-  const conditions = [
-    buildReadScopeCondition({
-      organizationId: ctx.organizationId,
-      userId: ctx.userId,
-      teamIds,
-    }),
-    ilike(schema.memoriesTable.content, `%${escapeLikePattern(query)}%`),
-  ];
+  const readScope = await buildAgentReadScope(ctx);
+  if (!readScope?.scopeCondition) {
+    const formatted: ReturnType<typeof formatMemoryForChat>[] = [];
+    return structuredSuccessResult(
+      { memories: formatted },
+      JSON.stringify({ memories: formatted }, null, 2),
+    );
+  }
+
   const memories = await db
     .select()
     .from(schema.memoriesTable)
-    .where(and(...conditions))
+    .where(
+      and(
+        readScope.scopeCondition,
+        ilike(schema.memoriesTable.content, `%${escapeLikePattern(query)}%`),
+      ),
+    )
     .orderBy(desc(schema.memoriesTable.createdAt));
 
   const formatted = memories.map(formatMemoryForChat);
@@ -218,83 +317,153 @@ async function searchReadableMemories(
   );
 }
 
-async function countPersonalCoreMemories(ctx: UserContext): Promise<number> {
-  const rows = await MemoryModel.listReadable({
-    organizationId: ctx.organizationId,
-    userId: ctx.userId,
-    teamIds: [],
-    tier: "core",
-    visibility: "personal",
+async function authorizeScopedMemoryWrite(params: {
+  userId: string;
+  organizationId: string;
+  visibility: MemoryVisibility;
+  ownerUserId: string | null;
+  teamId: string | null;
+}): Promise<ReturnType<typeof errorResult> | null> {
+  const checker = await getMemoryPermissionChecker({
+    userId: params.userId,
+    organizationId: params.organizationId,
   });
-  return rows.length;
+  const userTeamIds = checker.isAdmin
+    ? []
+    : await TeamModel.getUserTeamIds(params.userId);
+
+  try {
+    requireMemoryModifyPermission({
+      checker,
+      visibility: params.visibility,
+      ownerUserId: params.ownerUserId,
+      teamId: params.teamId,
+      userTeamIds,
+      userId: params.userId,
+    });
+  } catch (error) {
+    return errorResult(
+      error instanceof Error
+        ? error.message
+        : "You do not have permission to modify this memory scope.",
+    );
+  }
+
+  return null;
 }
 
-async function createPersonalMemory(
-  ctx: UserContext,
-  context: ArchestraContext,
-  args: z.infer<typeof MemoryToolArgsSchema>,
-) {
-  const denied = await requireMemoryWritePermission(ctx, "create");
-  if (denied) return denied;
+type ScopedMemoryCreateResult =
+  | CallToolResult
+  | { error: string }
+  | { row: Memory; duplicate: boolean };
 
-  if (context.contextIsTrusted === false) {
-    return successResult(TAINTED_WRITE_MESSAGE);
-  }
+function isToolErrorResult(
+  result: ScopedMemoryCreateResult,
+): result is CallToolResult {
+  return "isError" in result && result.isError === true;
+}
 
-  const content = args.content?.trim();
-  if (!content) {
-    return errorResult("create requires non-empty content.");
-  }
+function isScopedMemoryErrorResult(
+  result: ScopedMemoryCreateResult,
+): result is { error: string } {
+  return "error" in result;
+}
 
-  const duplicate = await findPersonalDuplicate(ctx, content);
+function isScopedMemorySuccessResult(
+  result: ScopedMemoryCreateResult,
+): result is { row: Memory; duplicate: boolean } {
+  return "row" in result;
+}
+
+async function createScopedMemory(params: {
+  ctx: AgentMemoryContext;
+  content: string;
+  visibility: MemoryVisibility;
+  userId: string | null;
+  teamId: string | null;
+}): Promise<ScopedMemoryCreateResult> {
+  const { ctx, content, visibility, userId, teamId } = params;
+
+  const deniedScope = await authorizeScopedMemoryWrite({
+    userId: ctx.userId,
+    organizationId: ctx.organizationId,
+    visibility,
+    ownerUserId: userId,
+    teamId,
+  });
+  if (deniedScope) return deniedScope;
+
+  const duplicate = await db
+    .select()
+    .from(schema.memoriesTable)
+    .where(
+      buildDuplicateCondition({
+        organizationId: ctx.organizationId,
+        visibility,
+        userId,
+        teamId,
+        content,
+      }),
+    )
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+
   if (duplicate) {
-    return successResult("Memory already exists with the same content.");
+    return { row: duplicate, duplicate: true as const };
   }
 
-  const coreCount = await countPersonalCoreMemories(ctx);
+  const coreCount = await countCoreMemoriesInScope({
+    organizationId: ctx.organizationId,
+    visibility,
+    userId,
+    teamId,
+  });
   if (coreCount >= MAX_CORE_ITEMS_PER_SCOPE) {
-    return errorResult(
-      `You already have ${MAX_CORE_ITEMS_PER_SCOPE} personal memories. Remove one in Settings before adding another.`,
-    );
+    return {
+      error: `You already have ${MAX_CORE_ITEMS_PER_SCOPE} core memories in this scope. Remove one in Settings before adding another.`,
+    };
   }
 
   const insertValues = {
     organizationId: ctx.organizationId,
-    visibility: "personal" as const,
-    userId: ctx.userId,
-    teamId: null,
+    visibility,
+    userId,
+    teamId,
     content,
     tier: "core" as const,
     createdBy: ctx.userId,
+    writtenByAgentId: ctx.agentId,
+    sourceKind: "agent" as const,
     taintedAtWrite: false,
   };
 
-  const created = await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const fetchExisting = async () => {
       const [existing] = await tx
         .select()
         .from(schema.memoriesTable)
         .where(
-          and(
-            eq(schema.memoriesTable.organizationId, ctx.organizationId),
-            eq(schema.memoriesTable.userId, ctx.userId),
-            eq(schema.memoriesTable.visibility, "personal"),
-            eq(schema.memoriesTable.content, content),
-          ),
+          buildDuplicateCondition({
+            organizationId: ctx.organizationId,
+            visibility,
+            userId,
+            teamId,
+            content,
+          }),
         )
         .limit(1);
       return existing ?? null;
     };
 
-    const duplicate = await fetchExisting();
-    if (duplicate) {
-      return { row: duplicate, duplicate: true };
+    const existingDuplicate = await fetchExisting();
+    if (existingDuplicate) {
+      return { row: existingDuplicate, duplicate: true as const };
     }
 
     try {
       const row = await MemoryModel.create(insertValues, tx);
       if (!row) {
-        return { row: await fetchExisting(), duplicate: true };
+        return { row: await fetchExisting(), duplicate: true as const };
       }
 
       await tx.insert(schema.auditLogsTable).values({
@@ -310,41 +479,428 @@ async function createPersonalMemory(
         httpMethod: null,
         httpPath: null,
       });
-      return { row, duplicate: false };
+      return { row, duplicate: false as const };
     } catch (error) {
       if (isUniqueConstraintError(error)) {
-        return { row: await fetchExisting(), duplicate: true };
+        return { row: await fetchExisting(), duplicate: true as const };
       }
       throw error;
     }
   });
+}
+
+type TeamFanOutCreateResult =
+  | CallToolResult
+  | { error: string }
+  | { rows: Memory[]; duplicateOnly: boolean };
+
+function isTeamFanOutToolErrorResult(
+  result: TeamFanOutCreateResult,
+): result is CallToolResult {
+  return "isError" in result && result.isError === true;
+}
+
+function isTeamFanOutErrorResult(
+  result: TeamFanOutCreateResult,
+): result is { error: string } {
+  return "error" in result;
+}
+
+function isTeamFanOutSuccessResult(
+  result: TeamFanOutCreateResult,
+): result is { rows: Memory[]; duplicateOnly: boolean } {
+  return "rows" in result;
+}
+
+async function createTeamMemoryFanOut(params: {
+  ctx: AgentMemoryContext;
+  content: string;
+  teamIds: string[];
+}): Promise<TeamFanOutCreateResult> {
+  const { ctx, content, teamIds } = params;
+
+  for (const teamId of teamIds) {
+    const deniedScope = await authorizeScopedMemoryWrite({
+      userId: ctx.userId,
+      organizationId: ctx.organizationId,
+      visibility: "team",
+      ownerUserId: null,
+      teamId,
+    });
+    if (deniedScope) return deniedScope;
+  }
+
+  for (const teamId of teamIds) {
+    const [existingDuplicate] = await db
+      .select()
+      .from(schema.memoriesTable)
+      .where(
+        buildDuplicateCondition({
+          organizationId: ctx.organizationId,
+          visibility: "team",
+          userId: null,
+          teamId,
+          content,
+        }),
+      )
+      .limit(1);
+    if (existingDuplicate) {
+      continue;
+    }
+
+    const coreCount = await countCoreMemoriesInScope({
+      organizationId: ctx.organizationId,
+      visibility: "team",
+      userId: null,
+      teamId,
+    });
+    if (coreCount >= MAX_CORE_ITEMS_PER_SCOPE) {
+      return {
+        error: `You already have ${MAX_CORE_ITEMS_PER_SCOPE} core memories in this scope. Remove one in Settings before adding another.`,
+      };
+    }
+  }
+
+  const insertValuesBase = {
+    organizationId: ctx.organizationId,
+    visibility: "team" as const,
+    userId: null,
+    content,
+    tier: "core" as const,
+    createdBy: ctx.userId,
+    writtenByAgentId: ctx.agentId,
+    sourceKind: "agent" as const,
+    taintedAtWrite: false,
+  };
+
+  try {
+    return await db.transaction(async (tx) => {
+      const rows: Memory[] = [];
+      let duplicateOnly = true;
+
+      for (const teamId of teamIds) {
+        const [existingDuplicate] = await tx
+          .select()
+          .from(schema.memoriesTable)
+          .where(
+            buildDuplicateCondition({
+              organizationId: ctx.organizationId,
+              visibility: "team",
+              userId: null,
+              teamId,
+              content,
+            }),
+          )
+          .limit(1);
+
+        if (existingDuplicate) {
+          rows.push(existingDuplicate);
+          continue;
+        }
+
+        const coreCount = await countCoreMemoriesInScope(
+          {
+            organizationId: ctx.organizationId,
+            visibility: "team",
+            userId: null,
+            teamId,
+          },
+          tx,
+        );
+        if (coreCount >= MAX_CORE_ITEMS_PER_SCOPE) {
+          throw new Error("CORE_SCOPE_LIMIT");
+        }
+
+        try {
+          const row = await MemoryModel.create(
+            { ...insertValuesBase, teamId },
+            tx,
+          );
+          if (!row) {
+            const [raceDuplicate] = await tx
+              .select()
+              .from(schema.memoriesTable)
+              .where(
+                buildDuplicateCondition({
+                  organizationId: ctx.organizationId,
+                  visibility: "team",
+                  userId: null,
+                  teamId,
+                  content,
+                }),
+              )
+              .limit(1);
+            if (raceDuplicate) {
+              rows.push(raceDuplicate);
+              continue;
+            }
+            throw new Error("FAILED_TEAM_FANOUT_INSERT");
+          }
+
+          await tx.insert(schema.auditLogsTable).values({
+            organizationId: ctx.organizationId,
+            occurredAt: new Date(),
+            actorId: ctx.userId,
+            actorType: "user",
+            action: "memory.created",
+            outcome: "success",
+            resourceType: "memory",
+            resourceId: row.id,
+            after: formatMemoryAuditSnapshot(row),
+            httpMethod: null,
+            httpPath: null,
+          });
+
+          rows.push(row);
+          duplicateOnly = false;
+        } catch (error) {
+          if (isUniqueConstraintError(error)) {
+            const [raceDuplicate] = await tx
+              .select()
+              .from(schema.memoriesTable)
+              .where(
+                buildDuplicateCondition({
+                  organizationId: ctx.organizationId,
+                  visibility: "team",
+                  userId: null,
+                  teamId,
+                  content,
+                }),
+              )
+              .limit(1);
+            if (raceDuplicate) {
+              rows.push(raceDuplicate);
+              continue;
+            }
+          }
+          throw error;
+        }
+      }
+
+      return { rows, duplicateOnly };
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "CORE_SCOPE_LIMIT") {
+      return {
+        error: `You already have ${MAX_CORE_ITEMS_PER_SCOPE} core memories in this scope. Remove one in Settings before adding another.`,
+      };
+    }
+    throw error;
+  }
+}
+
+async function createAgentMemory(
+  ctx: AgentMemoryContext,
+  context: ArchestraContext,
+  args: z.infer<typeof MemoryToolArgsSchema>,
+) {
+  const denied = await requireMemoryWritePermission(ctx, "create");
+  if (denied) return denied;
+
+  if (context.contextIsTrusted === false) {
+    return successResult(TAINTED_WRITE_MESSAGE);
+  }
+
+  const content = args.content?.trim();
+  if (!content) {
+    return errorResult("create requires non-empty content.");
+  }
+
+  const agentConfig = await loadAgentMemoryConfig(ctx.agentId);
+  if (!agentConfig || agentConfig.organizationId !== ctx.organizationId) {
+    return errorResult("Agent not found.");
+  }
+
+  const targetMode = resolveAgentMemoryTargetMode(agentConfig);
+  if (targetMode !== "personal") {
+    const deniedSharedWrite = await denyWhenSharedMemoryWriteDisabled(
+      ctx,
+      targetMode === "org" ? "org" : "team",
+    );
+    if (deniedSharedWrite) return deniedSharedWrite;
+  }
+
+  if (targetMode === "personal") {
+    const created = await createScopedMemory({
+      ctx,
+      content,
+      visibility: "personal",
+      userId: ctx.userId,
+      teamId: null,
+    });
+
+    if (isToolErrorResult(created)) {
+      return created;
+    }
+    if (isScopedMemoryErrorResult(created)) {
+      return errorResult(created.error);
+    }
+    if (!isScopedMemorySuccessResult(created)) {
+      return errorResult("Failed to save memory.");
+    }
+
+    logger.info(
+      {
+        organizationId: ctx.organizationId,
+        userId: ctx.userId,
+        agentId: ctx.agentId,
+        memoryId: created.row?.id,
+        duplicate: created.duplicate,
+        visibility: "personal",
+      },
+      "[Memory] Agent-targeted personal memory created",
+    );
+
+    if (created.row && !created.duplicate) {
+      return structuredSuccessResult(
+        { memory: formatMemoryForChat(created.row) },
+        `Saved memory ${created.row.id}.`,
+      );
+    }
+
+    if (created.row) {
+      return successResult("Memory already exists with the same content.");
+    }
+
+    return errorResult("Failed to save memory.");
+  }
+
+  if (targetMode === "org") {
+    const created = await createScopedMemory({
+      ctx,
+      content,
+      visibility: "org",
+      userId: null,
+      teamId: null,
+    });
+
+    if (isToolErrorResult(created)) {
+      return created;
+    }
+    if (isScopedMemoryErrorResult(created)) {
+      return errorResult(created.error);
+    }
+    if (!isScopedMemorySuccessResult(created)) {
+      return errorResult("Failed to save memory.");
+    }
+
+    logger.info(
+      {
+        organizationId: ctx.organizationId,
+        userId: ctx.userId,
+        agentId: ctx.agentId,
+        memoryId: created.row?.id,
+        duplicate: created.duplicate,
+        visibility: "org",
+      },
+      "[Memory] Agent-targeted org memory created",
+    );
+
+    if (created.row && !created.duplicate) {
+      return structuredSuccessResult(
+        { memory: formatMemoryForChat(created.row) },
+        `Saved memory ${created.row.id}.`,
+      );
+    }
+
+    if (created.row) {
+      return successResult("Memory already exists with the same content.");
+    }
+
+    return errorResult("Failed to save memory.");
+  }
+
+  const agentTeamIds = await AgentTeamModel.getTeamsForAgent(ctx.agentId);
+  if (agentTeamIds.length === 0) {
+    return errorResult(
+      "This agent has no teams assigned, so team memory cannot be saved.",
+    );
+  }
+
+  const fanOut = await createTeamMemoryFanOut({
+    ctx,
+    content,
+    teamIds: agentTeamIds,
+  });
+
+  if (isTeamFanOutToolErrorResult(fanOut)) {
+    return fanOut;
+  }
+  if (isTeamFanOutErrorResult(fanOut)) {
+    return errorResult(fanOut.error);
+  }
+  if (!isTeamFanOutSuccessResult(fanOut)) {
+    return errorResult("Failed to save memory.");
+  }
+
+  const { rows: createdRows, duplicateOnly } = fanOut;
 
   logger.info(
     {
       organizationId: ctx.organizationId,
       userId: ctx.userId,
-      memoryId: created.row?.id,
-      duplicate: created.duplicate,
+      agentId: ctx.agentId,
+      memoryIds: createdRows.map((row) => row.id),
+      teamCount: agentTeamIds.length,
+      duplicateOnly,
     },
-    "[Memory] Personal memory created",
+    "[Memory] Agent-targeted team memory fan-out",
   );
 
-  if (created.row && !created.duplicate) {
-    return structuredSuccessResult(
-      { memory: formatMemoryForChat(created.row) },
-      `Saved memory ${created.row.id}.`,
-    );
+  if (createdRows.length === 0) {
+    return errorResult("Failed to save memory.");
   }
 
-  if (created.row) {
+  if (duplicateOnly) {
     return successResult("Memory already exists with the same content.");
   }
 
-  return errorResult("Failed to save memory.");
+  const formatted = createdRows.map(formatMemoryForChat);
+  return structuredSuccessResult(
+    { memories: formatted },
+    `Saved ${formatted.length} team ${formatted.length === 1 ? "memory" : "memories"}.`,
+  );
 }
 
-async function updatePersonalMemory(
-  ctx: UserContext,
+async function canModifyMemoryInAgentContext(
+  ctx: AgentMemoryContext,
+  memory: Memory,
+): Promise<boolean> {
+  const [agentConfig, agentTeamIds] = await Promise.all([
+    loadAgentMemoryConfig(ctx.agentId),
+    AgentTeamModel.getTeamsForAgent(ctx.agentId),
+  ]);
+  if (!agentConfig || agentConfig.organizationId !== ctx.organizationId) {
+    return false;
+  }
+
+  const targetMode = resolveAgentMemoryTargetMode(agentConfig);
+  const matchesTarget =
+    (targetMode === "personal" &&
+      memory.visibility === "personal" &&
+      memory.userId === ctx.userId) ||
+    (targetMode === "org" && memory.visibility === "org") ||
+    (targetMode === "team" &&
+      memory.visibility === "team" &&
+      memory.teamId !== null &&
+      agentTeamIds.includes(memory.teamId));
+  if (!matchesTarget) {
+    return false;
+  }
+
+  const denied = await authorizeScopedMemoryWrite({
+    userId: ctx.userId,
+    organizationId: ctx.organizationId,
+    visibility: memory.visibility,
+    ownerUserId: memory.userId,
+    teamId: memory.teamId,
+  });
+
+  return denied === null;
+}
+
+async function updateMemory(
+  ctx: AgentMemoryContext,
   context: ArchestraContext,
   args: z.infer<typeof MemoryToolArgsSchema>,
 ) {
@@ -369,12 +925,18 @@ async function updatePersonalMemory(
   if (
     !existing ||
     existing.organizationId !== ctx.organizationId ||
-    existing.userId !== ctx.userId
+    !(await canModifyMemoryInAgentContext(ctx, existing))
   ) {
     return errorResult(
       "Memory not found or you do not have permission to update it.",
     );
   }
+
+  const deniedSharedWrite = await denyWhenSharedMemoryWriteDisabled(
+    ctx,
+    existing.visibility,
+  );
+  if (deniedSharedWrite) return deniedSharedWrite;
 
   let updated: { row: Memory } | { error: string };
   try {
@@ -386,10 +948,13 @@ async function updatePersonalMemory(
             .from(schema.memoriesTable)
             .where(
               and(
-                eq(schema.memoriesTable.organizationId, ctx.organizationId),
-                eq(schema.memoriesTable.userId, ctx.userId),
-                eq(schema.memoriesTable.visibility, "personal"),
-                eq(schema.memoriesTable.content, content),
+                buildDuplicateCondition({
+                  organizationId: ctx.organizationId,
+                  visibility: existing.visibility,
+                  userId: existing.userId,
+                  teamId: existing.teamId,
+                  content,
+                }),
                 ne(schema.memoriesTable.id, memoryId),
               ),
             )
@@ -441,9 +1006,10 @@ async function updatePersonalMemory(
     {
       organizationId: ctx.organizationId,
       userId: ctx.userId,
+      agentId: ctx.agentId,
       memoryId: updated.row.id,
     },
-    "[Memory] Personal memory updated",
+    "[Memory] Memory updated via agent tool",
   );
 
   return structuredSuccessResult(
@@ -452,8 +1018,8 @@ async function updatePersonalMemory(
   );
 }
 
-async function deletePersonalMemory(
-  ctx: UserContext,
+async function deleteMemory(
+  ctx: AgentMemoryContext,
   context: ArchestraContext,
   args: z.infer<typeof MemoryToolArgsSchema>,
 ) {
@@ -473,12 +1039,18 @@ async function deletePersonalMemory(
   if (
     !existing ||
     existing.organizationId !== ctx.organizationId ||
-    existing.userId !== ctx.userId
+    !(await canModifyMemoryInAgentContext(ctx, existing))
   ) {
     return errorResult(
       "Memory not found or you do not have permission to delete it.",
     );
   }
+
+  const deniedSharedWrite = await denyWhenSharedMemoryWriteDisabled(
+    ctx,
+    existing.visibility,
+  );
+  if (deniedSharedWrite) return deniedSharedWrite;
 
   const deleted = await db.transaction(async (tx) => {
     const result = await tx
@@ -513,9 +1085,10 @@ async function deletePersonalMemory(
     {
       organizationId: ctx.organizationId,
       userId: ctx.userId,
+      agentId: ctx.agentId,
       memoryId: existing.id,
     },
-    "[Memory] Personal memory deleted",
+    "[Memory] Memory deleted via agent tool",
   );
 
   return successResult(`Deleted memory ${existing.id}.`);
@@ -527,12 +1100,12 @@ const registry = defineArchestraTools([
     title: "Memory",
     description:
       "View, search, create, update, or delete durable agent memory. " +
-      "Writes always target your personal memories; search and view read " +
-      "personal memories you own. Search also includes team and org memories " +
-      "visible to you.",
+      "Writes target the current agent's memory scope (personal, team, or org). " +
+      "Reads always include your personal memories plus shared memories allowed " +
+      "by the agent's scope, capped by your memory access level.",
     schema: MemoryToolArgsSchema,
     async handler({ args, context }) {
-      const ctx = requireUserContext(context);
+      const ctx = resolveAgentMemoryContext(context);
       if (!ctx) {
         return errorResult("This tool requires an authenticated user session.");
       }
@@ -547,15 +1120,15 @@ const registry = defineArchestraTools([
 
       switch (args.command) {
         case "view":
-          return viewPersonalMemories(ctx, args);
+          return viewMemories(ctx, args);
         case "search":
           return searchReadableMemories(ctx, args);
         case "create":
-          return createPersonalMemory(ctx, context, args);
+          return createAgentMemory(ctx, context, args);
         case "update":
-          return updatePersonalMemory(ctx, context, args);
+          return updateMemory(ctx, context, args);
         case "delete":
-          return deletePersonalMemory(ctx, context, args);
+          return deleteMemory(ctx, context, args);
         default:
           return errorResult("Unsupported memory command.");
       }

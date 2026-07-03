@@ -7,6 +7,8 @@ import { handleApiError, toApiError } from "@/lib/utils";
 
 export type MemoryTier = "core" | "archival";
 export type MemoryVisibility = ResourceVisibilityScope;
+export type MemoryAccessLevel = "personal" | "team" | "organization";
+export type MemorySourceKind = "manual" | "agent";
 
 export interface MemoryEntry {
   id: string;
@@ -17,9 +19,38 @@ export interface MemoryEntry {
   teamId: string | null;
   content: string;
   createdBy: string;
+  createdByName?: string;
+  writtenByAgentId: string | null;
+  sourceKind: MemorySourceKind;
   taintedAtWrite: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+type MemoriesResponse = {
+  data: MemoryEntry[];
+  memoryAccessLevel: MemoryAccessLevel;
+};
+
+export function memoryVisibilitiesForAccessLevel(
+  level: MemoryAccessLevel,
+): MemoryVisibility[] {
+  switch (level) {
+    case "personal":
+      return ["personal"];
+    case "team":
+      return ["personal", "team"];
+    case "organization":
+      return ["personal", "team", "org"];
+  }
+}
+
+export function highestMemoryTabForAccessLevel(
+  level: MemoryAccessLevel,
+): MemoryVisibility {
+  if (level === "organization") return "org";
+  if (level === "team") return "team";
+  return "personal";
 }
 
 type CreateMemoryInput = {
@@ -80,10 +111,13 @@ export function useMemories(
     queryKey: ["memories", visibility],
     queryFn: async () => {
       try {
-        const result = await memoryRequest<{ data: MemoryEntry[] }>(
+        const result = await memoryRequest<MemoriesResponse>(
           `/api/memory?visibility=${encodeURIComponent(visibility)}`,
         );
-        return result.data ?? [];
+        return {
+          memories: result.data ?? [],
+          memoryAccessLevel: result.memoryAccessLevel ?? "organization",
+        };
       } catch (error) {
         if (
           typeof error === "object" &&
@@ -100,6 +134,14 @@ export function useMemories(
     },
     enabled: (options?.enabled ?? true) && !!canReadMemories,
   });
+}
+
+export function useMemoryAccessLevel(options?: { enabled?: boolean }) {
+  const query = useMemories("personal", options);
+  return {
+    ...query,
+    data: query.data?.memoryAccessLevel,
+  };
 }
 
 export function useCreateMemory() {

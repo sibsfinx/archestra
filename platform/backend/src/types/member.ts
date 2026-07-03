@@ -5,8 +5,18 @@ import {
 } from "drizzle-zod";
 import { z } from "zod";
 import { schema } from "@/database";
+import { MemoryVisibilitySchema } from "./memory";
 
-export const MemberSchema = createSelectSchema(schema.membersTable);
+export const MemoryAccessLevelSchema = z.enum([
+  "personal",
+  "team",
+  "organization",
+]);
+export type MemoryAccessLevel = z.infer<typeof MemoryAccessLevelSchema>;
+
+export const MemberSchema = createSelectSchema(schema.membersTable, {
+  memoryAccessLevel: MemoryAccessLevelSchema,
+});
 
 export const MemberListItemSchema = z.object({
   id: z.string(),
@@ -16,6 +26,11 @@ export const MemberListItemSchema = z.object({
   image: z.string().nullable(),
   role: z.string(),
   createdAt: z.date(),
+  memoryAccessLevel: MemoryAccessLevelSchema,
+});
+
+export const UpdateMemberMemoryAccessBodySchema = z.object({
+  accessLevel: MemoryAccessLevelSchema,
 });
 
 const UpdateMemberSchema = createUpdateSchema(schema.membersTable);

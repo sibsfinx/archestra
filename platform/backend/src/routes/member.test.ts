@@ -106,6 +106,82 @@ describe("member routes", () => {
       },
     });
   });
+
+  test("PATCH /api/members/:memberId/memory-access updates level for all duplicate rows", async ({
+    makeMember,
+    makeUser,
+  }) => {
+    const targetUser = await makeUser({ name: "Memory Scoped" });
+    const firstMembership = await makeMember(targetUser.id, organizationId, {
+      role: "member",
+    });
+    await makeMember(targetUser.id, organizationId, { role: "member" });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/members/${firstMembership.id}/memory-access`,
+      payload: { accessLevel: "personal" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().memoryAccessLevel).toBe("personal");
+
+    const listResponse = await app.inject({
+      method: "GET",
+      url: `/api/members?limit=50&offset=0&name=Memory`,
+    });
+    const listed = listResponse
+      .json()
+      .data.filter(
+        (member: { userId: string }) => member.userId === targetUser.id,
+      );
+    expect(listed).toHaveLength(2);
+    expect(
+      listed.every(
+        (member: { memoryAccessLevel: string }) =>
+          member.memoryAccessLevel === "personal",
+      ),
+    ).toBe(true);
+  });
+
+  test("PATCH /api/members/:memberId/memory-access rejects non memory-admin", async ({
+    makeMember,
+    makeUser,
+  }) => {
+    const nonAdmin = await makeUser({ name: "Regular Member" });
+    await makeMember(nonAdmin.id, organizationId, { role: "member" });
+    const targetUser = await makeUser({ name: "Target Member" });
+    const targetMembership = await makeMember(targetUser.id, organizationId, {
+      role: "member",
+    });
+
+    const nonAdminApp = createFastifyInstance();
+    nonAdminApp.addHook("onRequest", async (request) => {
+      (
+        request as typeof request & {
+          user: unknown;
+          organizationId: string;
+        }
+      ).user = nonAdmin;
+      (
+        request as typeof request & {
+          user: { id: string };
+          organizationId: string;
+        }
+      ).organizationId = organizationId;
+    });
+    const { default: memberRoutes } = await import("./member");
+    await nonAdminApp.register(memberRoutes);
+
+    const response = await nonAdminApp.inject({
+      method: "PATCH",
+      url: `/api/members/${targetMembership.id}/memory-access`,
+      payload: { accessLevel: "personal" },
+    });
+
+    expect(response.statusCode).toBe(403);
+    await nonAdminApp.close();
+  });
 });
 
 describe("GET /api/organization/members/:idOrEmail", () => {

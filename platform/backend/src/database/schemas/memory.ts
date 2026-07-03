@@ -9,7 +9,12 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { MemoryTier, MemoryVisibility } from "@/types/memory";
+import type {
+  MemorySourceKind,
+  MemoryTier,
+  MemoryVisibility,
+} from "@/types/memory";
+import agentsTable from "./agent";
 import organizationsTable from "./organization";
 import { team } from "./team";
 import usersTable from "./user";
@@ -34,6 +39,14 @@ const memoriesTable = pgTable(
     createdBy: text("created_by")
       .notNull()
       .references(() => usersTable.id),
+    writtenByAgentId: uuid("written_by_agent_id").references(
+      () => agentsTable.id,
+      { onDelete: "set null" },
+    ),
+    sourceKind: text("source_kind")
+      .$type<MemorySourceKind>()
+      .notNull()
+      .default("manual"),
     taintedAtWrite: boolean("tainted_at_write").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

@@ -3,6 +3,7 @@ import { and, count, eq, ilike, inArray, or } from "drizzle-orm";
 import db, { schema, type Transaction } from "@/database";
 import { createPaginatedResult } from "@/database/utils/pagination";
 import logger from "@/logging";
+import type { MemoryAccessLevel } from "@/types/member";
 
 class MemberModel {
   /**
@@ -267,6 +268,7 @@ class MemberModel {
           userId: schema.membersTable.userId,
           role: schema.membersTable.role,
           createdAt: schema.membersTable.createdAt,
+          memoryAccessLevel: schema.membersTable.memoryAccessLevel,
           name: schema.usersTable.name,
           email: schema.usersTable.email,
           image: schema.usersTable.image,
@@ -519,6 +521,30 @@ class MemberModel {
       .from(schema.membersTable)
       .where(eq(schema.membersTable.defaultAgentId, agentId));
     return (result?.count ?? 0) > 0;
+  }
+
+  static async updateMemoryAccessLevel(
+    memberId: string,
+    organizationId: string,
+    level: MemoryAccessLevel,
+  ) {
+    const member = await MemberModel.getById(memberId);
+    if (!member || member.organizationId !== organizationId) {
+      return null;
+    }
+
+    const updated = await db
+      .update(schema.membersTable)
+      .set({ memoryAccessLevel: level })
+      .where(
+        and(
+          eq(schema.membersTable.userId, member.userId),
+          eq(schema.membersTable.organizationId, organizationId),
+        ),
+      )
+      .returning();
+
+    return updated.find((row) => row.id === memberId) ?? updated[0] ?? null;
   }
 }
 

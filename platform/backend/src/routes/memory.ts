@@ -13,22 +13,30 @@ import {
 } from "@/auth/memory-permissions";
 import db, { schema } from "@/database";
 import { assertMemoryEnabledForOrganization } from "@/memory-feature";
-import { MemoryModel, TeamModel } from "@/models";
+import { MemoryModel, TeamModel, UserModel } from "@/models";
+import { resolveMemoryAccessLevel } from "@/models/memory-scope-access";
 import {
   ApiError,
   constructResponseSchema,
   DeleteObjectResponseSchema,
   type Memory,
+  MemoryAccessLevelSchema,
   type MemoryTier,
   MemoryTierSchema,
   type MemoryVisibility,
   MemoryVisibilitySchema,
+  MemoryListItemSchema,
   SelectMemorySchema,
 } from "@/types";
 import { isUniqueConstraintError } from "@/utils/db";
 
 const MemoryListQuerySchema = z.object({
   visibility: MemoryVisibilitySchema,
+});
+
+const MemoryListResponseSchema = z.object({
+  data: z.array(MemoryListItemSchema),
+  memoryAccessLevel: MemoryAccessLevelSchema,
 });
 
 const CreateMemoryBodySchema = z.object({
@@ -56,12 +64,14 @@ const memoryRoutes: FastifyPluginAsyncZod = async (fastify) => {
         description: "List memories for the settings UI, scoped by visibility",
         tags: ["Memory"],
         querystring: MemoryListQuerySchema,
-        response: constructResponseSchema(
-          z.object({ data: z.array(SelectMemorySchema) }),
-        ),
+        response: constructResponseSchema(MemoryListResponseSchema),
       },
     },
     async ({ query: { visibility }, organizationId, user }, reply) => {
+      const accessLevel = await resolveMemoryAccessLevel(
+        user.id,
+        organizationId,
+      );
       const checker = await getMemoryPermissionChecker({
         userId: user.id,
         organizationId,
@@ -73,9 +83,19 @@ const memoryRoutes: FastifyPluginAsyncZod = async (fastify) => {
         teamIds,
         visibility,
         includeAllTeams: checker.isAdmin && visibility === "team",
+        accessLevel,
       });
 
-      return reply.send({ data: memories });
+      const authorIds = [
+        ...new Set(memories.map((memory) => memory.createdBy)),
+      ];
+      const authorNames = await UserModel.getNamesByIds(authorIds);
+      const data = memories.map((memory) => ({
+        ...memory,
+        createdByName: authorNames.get(memory.createdBy) ?? undefined,
+      }));
+
+      return reply.send({ data, memoryAccessLevel: accessLevel });
     },
   );
 

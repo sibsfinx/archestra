@@ -3,7 +3,7 @@ title: "Access Control"
 category: Administration
 description: "Role-based access control (RBAC) system for managing user permissions in Archestra"
 order: 1
-lastUpdated: 2026-06-30
+lastUpdated: 2026-07-02
 ---
 <!--
 Check ../docs_writer_prompt.md before changing this file.
@@ -59,6 +59,7 @@ Full access to core resources and settings, but cannot manage users, roles, or i
 | Environments | `admin` |
 | GitHub App Configurations | `read`, `create`, `update`, `delete` |
 | Knowledge Sources | `read`, `create`, `update`, `delete`, `query` |
+| Memory | `read`, `create`, `update`, `delete`, `team-admin` |
 | Chats | `read`, `create`, `update`, `delete` |
 | Projects | `read`, `create`, `update`, `delete` |
 | Logs | `read` |
@@ -100,6 +101,7 @@ Can manage agents, tools, and chat, with read-only access to most other resource
 | MCP Server Installations | `read`, `create`, `delete` |
 | MCP Server Installation Requests | `read`, `create`, `update` |
 | Knowledge Sources | `read`, `query` |
+| Memory | `read`, `create`, `update`, `delete` |
 | Chats | `read`, `create`, `update`, `delete` |
 | Projects | `read`, `create`, `update`, `delete` |
 | API Keys | `read`, `create`, `delete` |
@@ -235,6 +237,12 @@ The following table lists all available permissions that can be assigned to cust
 | `member:create` | Add new members to the organization |
 | `member:update` | Change member roles and settings |
 | `member:delete` | Remove members from the organization |
+| `memory:read` | View memory entries within your scope |
+| `memory:create` | Create memory entries within your scope |
+| `memory:update` | Update memory entries within your scope |
+| `memory:delete` | Delete memory entries within your scope |
+| `memory:team-admin` | Manage team-scoped memory entries in your teams |
+| `memory:admin` | Manage organization-scoped memory and bypass scope restrictions |
 | `optimizationRule:read` | View optimization rules |
 | `optimizationRule:create` | Create new optimization rules |
 | `optimizationRule:update` | Modify optimization rules |

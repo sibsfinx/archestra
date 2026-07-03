@@ -77,6 +77,7 @@ export async function buildAgentSystemPrompt(params: {
     systemPrompt: agent.systemPrompt,
     organizationId,
     userId,
+    agentId,
     user,
   });
 
@@ -139,9 +140,10 @@ async function renderAgentPrompt(params: {
   systemPrompt: string | null;
   organizationId: string;
   userId: string;
+  agentId: string;
   user?: { name: string; email: string };
 }): Promise<string | null> {
-  const { systemPrompt, organizationId, userId, user } = params;
+  const { systemPrompt, organizationId, userId, agentId, user } = params;
 
   // Build template context only when prompts use Handlebars syntax.
   let promptContext: UserSystemPromptContext | null = null;
@@ -164,6 +166,7 @@ async function renderAgentPrompt(params: {
             organizationId,
             userId,
             teamIds,
+            agentId,
           })
         : [];
 

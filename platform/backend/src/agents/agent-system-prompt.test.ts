@@ -206,7 +206,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("own-personal-core;");
-    expect(prompt).toContain("member-team-core;");
+    expect(prompt).not.toContain("member-team-core;");
     expect(prompt).toContain("org-core-fact;");
     expect(prompt).not.toContain("own-personal-archival");
     expect(prompt).not.toContain("foreign-personal-core");
@@ -216,9 +216,8 @@ describe("buildAgentSystemPrompt", () => {
       expect.objectContaining({
         organizationId: agent.organizationId,
         userId: actingUser.id,
-        memoryCount: 3,
+        memoryCount: 2,
         memoryIds: expect.arrayContaining([
-          expect.any(String),
           expect.any(String),
           expect.any(String),
         ]),
@@ -286,23 +285,28 @@ describe("buildAgentSystemPrompt", () => {
     makeTeam,
     makeTeamMember,
   }) => {
+    const actingUser = await makeUser();
+    const orgAgent = await makeAgent({ scope: "org" });
+    await makeMember(actingUser.id, orgAgent.organizationId);
+
+    const noisyTeam = await makeTeam(orgAgent.organizationId, actingUser.id, {
+      name: "Noisy Team",
+    });
+    const quietTeam = await makeTeam(orgAgent.organizationId, actingUser.id, {
+      name: "Quiet Team",
+    });
+    await makeTeamMember(noisyTeam.id, actingUser.id);
+    await makeTeamMember(quietTeam.id, actingUser.id);
+
     const agent = await makeAgent({
+      organizationId: orgAgent.organizationId,
+      scope: "team",
+      teams: [noisyTeam.id, quietTeam.id],
       systemPrompt:
         `Facts ${SYSTEM_PROMPT_VARIABLE_EXPRESSIONS.memories}: ` +
         "{{#each memories}}{{content}};{{/each}}",
       toolExposureMode: "full",
     });
-    const actingUser = await makeUser();
-    await makeMember(actingUser.id, agent.organizationId);
-
-    const noisyTeam = await makeTeam(agent.organizationId, actingUser.id, {
-      name: "Noisy Team",
-    });
-    const quietTeam = await makeTeam(agent.organizationId, actingUser.id, {
-      name: "Quiet Team",
-    });
-    await makeTeamMember(noisyTeam.id, actingUser.id);
-    await makeTeamMember(quietTeam.id, actingUser.id);
 
     const baseTime = new Date("2026-06-01T12:00:00.000Z");
     for (let index = 0; index < 50; index += 1) {

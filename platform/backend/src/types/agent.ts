@@ -41,6 +41,10 @@ export type AgentType = z.infer<typeof AgentTypeSchema>;
 export const AgentScopeSchema = ResourceVisibilityScopeSchema;
 export type AgentScope = ResourceVisibilityScope;
 
+/** Where agent MCP/chat memory writes are stored. Falls back to `scope` when unset. */
+export const MemoryTargetModeSchema = ResourceVisibilityScopeSchema;
+export type MemoryTargetMode = ResourceVisibilityScope;
+
 export const ToolExposureModeSchema = z.enum(["full", "search_and_run_only"]);
 export type ToolExposureMode = z.infer<typeof ToolExposureModeSchema>;
 
@@ -139,6 +143,8 @@ const selectExtendedFields = {
   incomingEmailSecurityMode: IncomingEmailSecurityModeSchema,
   agentType: AgentTypeSchema,
   scope: AgentScopeSchema,
+  memoryTargetMode: MemoryTargetModeSchema.nullable(),
+  sharedMemoryWriteEnabled: z.boolean(),
   toolExposureMode: ToolExposureModeSchema,
   builtInAgentConfig: BuiltInAgentConfigSchema.nullable(),
   passthroughHeaders: z.array(z.string()).nullable(),
@@ -148,6 +154,8 @@ const insertExtendedFields = {
   incomingEmailSecurityMode: IncomingEmailSecurityModeSchema.optional(),
   agentType: AgentTypeSchema.optional(),
   scope: AgentScopeSchema.optional(),
+  memoryTargetMode: MemoryTargetModeSchema.nullable().optional(),
+  sharedMemoryWriteEnabled: z.boolean().optional(),
   toolExposureMode: ToolExposureModeSchema.optional(),
   builtInAgentConfig: BuiltInAgentConfigSchema.nullable().optional(),
   passthroughHeaders: PassthroughHeadersSchema,
@@ -200,6 +208,26 @@ function validateIncomingEmailDomain(
         path: ["incomingEmailAllowedDomain"],
       });
     }
+  }
+}
+
+function validateMemoryTargetModeMatchesScope(
+  data: {
+    scope?: AgentScope | null;
+    memoryTargetMode?: MemoryTargetMode | null;
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (!data.scope || !data.memoryTargetMode) {
+    return;
+  }
+
+  if (data.memoryTargetMode !== data.scope) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Memory target mode must match the agent scope",
+      path: ["memoryTargetMode"],
+    });
   }
 }
 
@@ -279,7 +307,10 @@ export const InsertAgentSchemaBase = createInsertSchema(
 
 // Full schema with validation refinement
 export const InsertAgentSchema = InsertAgentSchemaBase.superRefine(
-  validateIncomingEmailDomain,
+  (data, ctx) => {
+    validateIncomingEmailDomain(data, ctx);
+    validateMemoryTargetModeMatchesScope(data, ctx);
+  },
 );
 
 // Base schema without refinement - can be used with .partial()
@@ -309,7 +340,10 @@ export const UpdateAgentSchemaBase = createUpdateSchema(
 
 // Full schema with validation refinement
 export const UpdateAgentSchema = UpdateAgentSchemaBase.superRefine(
-  validateIncomingEmailDomain,
+  (data, ctx) => {
+    validateIncomingEmailDomain(data, ctx);
+    validateMemoryTargetModeMatchesScope(data, ctx);
+  },
 );
 
 export type Agent = z.infer<typeof SelectAgentSchema>;

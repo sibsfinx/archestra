@@ -299,6 +299,29 @@ describe("agent routes", () => {
       expect(agent.name).toBe(updatedName);
     });
 
+    test("rejects memoryTargetMode that does not match scope", async ({
+      makeAgent,
+    }) => {
+      const created = await makeAgent({
+        name: `Agent Scope Validation ${crypto.randomUUID().slice(0, 8)}`,
+        organizationId,
+        scope: "org",
+        authorId: user.id,
+      });
+
+      const response = await app.inject({
+        method: "PUT",
+        url: `/api/agents/${created.id}`,
+        payload: {
+          scope: "org",
+          memoryTargetMode: "personal",
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toContain("Memory target mode must match the agent scope");
+    });
+
     test("rejects an update that sets a model without an API key", async ({
       makeAgent,
     }) => {

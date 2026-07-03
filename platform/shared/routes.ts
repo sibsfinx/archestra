@@ -450,6 +450,7 @@ export const RouteId = {
   GetMemberDefaultAgent: "getMemberDefaultAgent",
   GetMemberDefaultModel: "getMemberDefaultModel",
   UpdateMemberDefaultModel: "updateMemberDefaultModel",
+  UpdateMemberMemoryAccess: "updateMemberMemoryAccess",
 
   // User Routes
   GetUserPermissions: "getUserPermissions",
