@@ -56,6 +56,10 @@ export const CacheKey = {
   TeamsThreadMuteHint: "teams-thread-mute-hint",
   /** Slack channel threads that already got the one-time "you can mute me" hint */
   SlackThreadMuteHint: "slack-thread-mute-hint",
+  /** Telegram approval-button payloads (callback_data is capped at 64 bytes) */
+  TelegramApprovalCallback: "chatops-telegram-approval",
+  /** One-shot codes linking a Telegram chat to a signed-in user */
+  TelegramLinkCode: "chatops-telegram-link",
 } as const;
 
 export type CacheKeyPrefix = (typeof CacheKey)[keyof typeof CacheKey];
