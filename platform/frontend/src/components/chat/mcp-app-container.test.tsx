@@ -90,7 +90,7 @@ import {
   reportAppDiagnostic,
 } from "@/lib/chat/app-diagnostics-store";
 import { useFeature } from "@/lib/config/config.query";
-import { AppsProvider, useApps } from "./apps-context";
+import { AppsProvider, type PanelApp, useApps } from "./apps-context";
 import { McpAppSection } from "./mcp-app-container";
 
 const mockUseApp = vi.mocked(useApp);
@@ -524,6 +524,96 @@ describe("McpAppContainer inline height (via McpAppSection)", () => {
         content: [{ type: "text", text: "some result" }],
       }),
     );
+  });
+});
+
+describe("McpAppContainer sandbox timeout recovery", () => {
+  const SANDBOX_PROXY_READY = "ui/notifications/sandbox-proxy-ready";
+  const SANDBOX_ORIGIN = "http://127.0.0.1:9000";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function renderTimedApp(connect: () => Promise<void>) {
+    const { AppBridge } = await import(
+      "@modelcontextprotocol/ext-apps/app-bridge"
+    );
+    await act(async () => {
+      render(
+        <McpAppSection
+          {...defaultProps}
+          preloadedResource={preloadedResource}
+        />,
+      );
+    });
+
+    const iframe = document.querySelector("iframe");
+    if (!iframe) throw new Error("iframe did not mount");
+    const bridge = (AppBridge as ReturnType<typeof vi.fn>).mock.instances.at(
+      -1,
+    ) as { connect: ReturnType<typeof vi.fn> } | undefined;
+    if (!bridge) throw new Error("bridge did not initialize");
+    bridge.connect.mockImplementation(connect);
+    return { bridge, iframe };
+  }
+
+  function dispatchReady(iframe: HTMLIFrameElement, origin: string) {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: iframe.contentWindow,
+        origin,
+        data: { method: SANDBOX_PROXY_READY },
+      }),
+    );
+  }
+
+  it("clears a timeout after the same sandbox connects late", async () => {
+    let resolveConnect: () => void = () => {};
+    const connectPromise = new Promise<void>((resolve) => {
+      resolveConnect = resolve;
+    });
+    const { bridge, iframe } = await renderTimedApp(() => connectPromise);
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    act(() => dispatchReady(iframe, "https://invalid.example"));
+    expect(bridge.connect).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    act(() => dispatchReady(iframe, SANDBOX_ORIGIN));
+    expect(bridge.connect).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveConnect();
+      await connectPromise;
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps an error visible when the late connection fails", async () => {
+    const { iframe } = await renderTimedApp(() =>
+      Promise.reject(new Error("late connection failed")),
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    await act(async () => {
+      dispatchReady(iframe, SANDBOX_ORIGIN);
+    });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 });
 
@@ -1138,6 +1228,7 @@ describe("McpAppSection unavailable owned app", () => {
 
 describe("McpAppSection owned-app panel chrome", () => {
   const APP_ID = "947051c7-ea8e-48ed-8077-a3cc904d9d61";
+  const SECOND_APP_ID = "6bc05a26-0ffc-4131-a073-c874701d2b91";
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1174,6 +1265,30 @@ describe("McpAppSection owned-app panel chrome", () => {
     });
   }
 
+  function OwnedPanelHost({ apps }: { apps: PanelApp[] }) {
+    const { panelToolCallId, setPanelApp } = useApps();
+    const panelApp = apps.find((app) => app.toolCallId === panelToolCallId);
+
+    return (
+      <>
+        <button type="button" onClick={() => setPanelApp("tc1")}>
+          Switch to first app
+        </button>
+        <div data-testid="panel-app">{panelApp?.appId ?? "none"}</div>
+        {panelApp?.appId ? (
+          <McpAppSection
+            {...defaultProps}
+            surface="panel"
+            appId={panelApp.appId}
+            toolCallId={panelApp.toolCallId}
+            uiResourceUri={panelApp.uiResourceUri}
+            preloadedResource={preloadedResource}
+          />
+        ) : null}
+      </>
+    );
+  }
+
   it("opens the app settings dialog from the panel gear", async () => {
     const user = userEvent.setup();
     await renderOwnedPanel();
@@ -1198,6 +1313,54 @@ describe("McpAppSection owned-app panel chrome", () => {
     expect(
       screen.getByRole("button", { name: /^settings$/i }),
     ).toBeInTheDocument();
+  });
+
+  it("closes settings when a newly rendered app takes the panel", async () => {
+    const user = userEvent.setup();
+    const apps: PanelApp[] = [
+      {
+        toolCallId: "tc1",
+        label: "First App",
+        uiResourceUri: "ui://first/app.html",
+        appId: APP_ID,
+        createdAt: 1,
+      },
+      {
+        toolCallId: "tc2",
+        label: "Second App",
+        uiResourceUri: "ui://second/app.html",
+        appId: SECOND_APP_ID,
+        createdAt: 2,
+      },
+    ];
+    mockUseApp.mockImplementation(
+      (appId) =>
+        ({ data: { id: appId, name: "Panel App" } }) as ReturnType<
+          typeof useApp
+        >,
+    );
+
+    const { rerender } = render(
+      <AppsProvider apps={[apps[0]]}>
+        <OwnedPanelHost apps={apps} />
+      </AppsProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: /^settings$/i }));
+    expect(screen.getByTestId("settings-form")).toBeInTheDocument();
+
+    rerender(
+      <AppsProvider apps={apps}>
+        <OwnedPanelHost apps={apps} />
+      </AppsProvider>,
+    );
+    expect(screen.getByTestId("panel-app")).toHaveTextContent(SECOND_APP_ID);
+    expect(screen.queryByTestId("settings-form")).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Switch to first app" }),
+    );
+    expect(screen.getByTestId("panel-app")).toHaveTextContent(APP_ID);
+    expect(screen.queryByTestId("settings-form")).not.toBeInTheDocument();
   });
 });
 

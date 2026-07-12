@@ -1035,7 +1035,10 @@ function SandboxIframe({
         appBridge
           .connect(transport)
           .then(() => {
-            if (!cancelled) setConnectedBridge(appBridge);
+            if (!cancelled) {
+              setError(null);
+              setConnectedBridge(appBridge);
+            }
           })
           .catch((err) => {
             if (!cancelled) {
@@ -1187,7 +1190,7 @@ function SandboxIframe({
       }}
     >
       {error && (
-        <div style={{ color: "red", padding: "1rem" }}>
+        <div role="alert" style={{ color: "red", padding: "1rem" }}>
           Error: {error.message}
         </div>
       )}
