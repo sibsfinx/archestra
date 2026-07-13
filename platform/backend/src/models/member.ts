@@ -3,6 +3,7 @@ import { and, count, eq, ilike, inArray, or } from "drizzle-orm";
 import db, { schema, type Transaction } from "@/database";
 import { createPaginatedResult } from "@/database/utils/pagination";
 import logger from "@/logging";
+import type { MemoryAccessLevel } from "@/types/member";
 
 class MemberModel {
   /**
@@ -214,6 +215,41 @@ class MemberModel {
     return results;
   }
 
+  /**
+   * Members of the organization whose user id is in `userIds`, same shape as
+   * findAllByOrganization. Lets a caller resolve a known subset (e.g. a member's
+   * teammates) without scanning the full roster.
+   */
+  static async findByUserIdsInOrganization(params: {
+    organizationId: string;
+    userIds: string[];
+  }) {
+    const { organizationId, userIds } = params;
+    if (userIds.length === 0) {
+      return [];
+    }
+    return db
+      .select({
+        id: schema.usersTable.id,
+        name: schema.usersTable.name,
+        email: schema.usersTable.email,
+        role: schema.membersTable.role,
+        systemRole: schema.usersTable.role,
+      })
+      .from(schema.membersTable)
+      .innerJoin(
+        schema.usersTable,
+        eq(schema.membersTable.userId, schema.usersTable.id),
+      )
+      .where(
+        and(
+          eq(schema.membersTable.organizationId, organizationId),
+          inArray(schema.usersTable.id, userIds),
+        ),
+      )
+      .orderBy(schema.usersTable.name);
+  }
+
   static async findUserIdsInOrganization(params: {
     organizationId: string;
     userIds: string[];
@@ -267,6 +303,7 @@ class MemberModel {
           userId: schema.membersTable.userId,
           role: schema.membersTable.role,
           createdAt: schema.membersTable.createdAt,
+          memoryAccessLevel: schema.membersTable.memoryAccessLevel,
           name: schema.usersTable.name,
           email: schema.usersTable.email,
           image: schema.usersTable.image,
@@ -519,6 +556,30 @@ class MemberModel {
       .from(schema.membersTable)
       .where(eq(schema.membersTable.defaultAgentId, agentId));
     return (result?.count ?? 0) > 0;
+  }
+
+  static async updateMemoryAccessLevel(
+    memberId: string,
+    organizationId: string,
+    level: MemoryAccessLevel,
+  ) {
+    const member = await MemberModel.getById(memberId);
+    if (!member || member.organizationId !== organizationId) {
+      return null;
+    }
+
+    const updated = await db
+      .update(schema.membersTable)
+      .set({ memoryAccessLevel: level })
+      .where(
+        and(
+          eq(schema.membersTable.userId, member.userId),
+          eq(schema.membersTable.organizationId, organizationId),
+        ),
+      )
+      .returning();
+
+    return updated.find((row) => row.id === memberId) ?? updated[0] ?? null;
   }
 }
 

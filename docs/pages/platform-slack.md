@@ -1,10 +1,12 @@
 ---
 title: Slack
 category: Agents
-order: 4
+order: 6
 description: Connect Archestra agents to Slack channels
 lastUpdated: 2026-02-23
 ---
+
+<!-- Renaming/deleting this file? Add a redirect in docs/redirects.json. -->
 
 Archestra can connect directly to Slack channels. When users mention the bot in a channel, messages are routed to your configured agent and responses appear directly in Slack threads.
 

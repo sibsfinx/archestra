@@ -31,8 +31,16 @@ vi.mock("@/components/ai-elements/message", () => ({
 }));
 
 vi.mock("@/components/ai-elements/reasoning", () => ({
-  Reasoning: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
+  Reasoning: ({
+    children,
+    isStreaming,
+  }: {
+    children: React.ReactNode;
+    isStreaming?: boolean;
+  }) => (
+    <div data-testid="reasoning" data-streaming={String(Boolean(isStreaming))}>
+      {children}
+    </div>
   ),
   ReasoningContent: ({ children }: { children: React.ReactNode }) => (
     <div>{children}</div>
@@ -144,6 +152,22 @@ vi.mock("@/components/chat/mcp-app-container", () => ({
       data-uri={props.uiResourceUri}
     />
   ),
+  McpAppEntryPill: (props: { appId?: string; toolName: string }) => (
+    <div
+      data-testid="mcp-app-pill"
+      data-app-id={props.appId ?? ""}
+      data-tool-name={props.toolName}
+    />
+  ),
+  // The content half carries the app-binding contract (uri + appId), so it
+  // keeps the mcp-app-section testid the binding assertions target.
+  McpAppEntryContent: (props: { uiResourceUri: string; appId?: string }) => (
+    <div
+      data-testid="mcp-app-section"
+      data-app-id={props.appId ?? ""}
+      data-uri={props.uiResourceUri}
+    />
+  ),
   McpToolOutput: null,
 }));
 
@@ -177,10 +201,7 @@ vi.mock("@/components/chat/knowledge-graph-citations", () => ({
   hasKnowledgeBaseToolCall: () => false,
 }));
 
-vi.mock("@/lib/auth/auth.query", () => ({
-  useHasPermissions: () => ({ data: true }),
-  useSession: () => ({ data: { user: { name: "Joey" } } }),
-}));
+vi.mock("@/lib/auth/auth.query");
 
 vi.mock("@/lib/chat/chat.query", () => ({
   useProfileToolsWithIds: () => ({ data: [] }),
@@ -204,13 +225,9 @@ vi.mock("@/lib/mcp/mcp-install-orchestrator.hook", () => ({
   }),
 }));
 
-vi.mock("@/lib/organization.query", () => ({
-  useOrganization: () => ({ data: null }),
-}));
+vi.mock("@/lib/organization.query");
 
-vi.mock("@/lib/hooks/use-app-name", () => ({
-  useAppIconLogo: () => "/custom-logo.png",
-}));
+vi.mock("@/lib/hooks/use-app-name");
 
 vi.mock("@/lib/chat/global-chat.context", () => ({
   useGlobalChat: () => ({
@@ -227,12 +244,25 @@ vi.mock("@/lib/mcp/archestra-mcp-server", () => ({
   }),
 }));
 
+import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
 import { PERSISTED_MESSAGE_ID_METADATA_KEY } from "@/lib/chat/chat-utils";
+import { useAppIconLogo } from "@/lib/hooks/use-app-name";
+import { useOrganization } from "@/lib/organization.query";
 import { ChatMessages } from "./chat-messages";
 
 describe("ChatMessages", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(useHasPermissions).mockReturnValue({
+      data: true,
+    } as ReturnType<typeof useHasPermissions>);
+    vi.mocked(useSession).mockReturnValue({
+      data: { user: { name: "Joey" } },
+    } as ReturnType<typeof useSession>);
+    vi.mocked(useOrganization).mockReturnValue({
+      data: null,
+    } as unknown as ReturnType<typeof useOrganization>);
+    vi.mocked(useAppIconLogo).mockReturnValue("/custom-logo.png");
   });
 
   it("renders the swap divider for branded built-in swap tools", () => {
@@ -261,6 +291,107 @@ describe("ChatMessages", () => {
     );
 
     expect(screen.getByText("Switched to GitHub Agent")).toBeInTheDocument();
+  });
+
+  it("does not render an accordion for an empty reasoning part", () => {
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          { type: "reasoning", text: "" },
+          { type: "reasoning", text: "   " },
+          { type: "text", text: "the answer" },
+        ],
+      },
+    ] as UIMessage[];
+
+    render(
+      <ChatMessages
+        conversationId="conv-1"
+        messages={messages}
+        status="ready"
+      />,
+    );
+
+    expect(screen.queryByTestId("reasoning")).not.toBeInTheDocument();
+    expect(screen.getByText("the answer")).toBeInTheDocument();
+  });
+
+  it("renders an accordion only for reasoning parts with real text", () => {
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          { type: "reasoning", text: "" },
+          { type: "reasoning", text: "weighing the options" },
+        ],
+      },
+    ] as UIMessage[];
+
+    render(
+      <ChatMessages
+        conversationId="conv-1"
+        messages={messages}
+        status="ready"
+      />,
+    );
+
+    expect(screen.getAllByTestId("reasoning")).toHaveLength(1);
+    expect(screen.getByText("weighing the options")).toBeInTheDocument();
+  });
+
+  it("marks the last reasoning part of the last message as streaming", () => {
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [{ type: "reasoning", text: "earlier thought" }],
+      },
+      {
+        id: "assistant-2",
+        role: "assistant",
+        parts: [{ type: "reasoning", text: "current thought" }],
+      },
+    ] as UIMessage[];
+
+    render(
+      <ChatMessages
+        conversationId="conv-1"
+        messages={messages}
+        status="streaming"
+      />,
+    );
+
+    const accordions = screen.getAllByTestId("reasoning");
+    expect(accordions).toHaveLength(2);
+    // Only the last part of the last message streams; earlier blocks are done.
+    expect(accordions[0]).toHaveAttribute("data-streaming", "false");
+    expect(accordions[1]).toHaveAttribute("data-streaming", "true");
+  });
+
+  it("marks no reasoning as streaming once the response is ready", () => {
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [{ type: "reasoning", text: "settled thought" }],
+      },
+    ] as UIMessage[];
+
+    render(
+      <ChatMessages
+        conversationId="conv-1"
+        messages={messages}
+        status="ready"
+      />,
+    );
+
+    expect(screen.getByTestId("reasoning")).toHaveAttribute(
+      "data-streaming",
+      "false",
+    );
   });
 
   it("keeps the loading logo visible for the whole streaming response", () => {
@@ -1590,6 +1721,70 @@ describe("owned-app inline rendering", () => {
       },
     });
     expect(screen.queryByTestId("mcp-app-section")).not.toBeInTheDocument();
+  });
+
+  it("app-binds an owned app opened via its __open launch tool (ui://archestra-app URI)", () => {
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-simple_todo__open",
+            toolCallId: "call-open-1",
+            state: "output-available",
+            input: {},
+            output: {
+              _meta: { ui: { resourceUri: `ui://archestra-app/${APP_ID}` } },
+            },
+          },
+        ],
+      },
+    ] as unknown as UIMessage[];
+
+    render(
+      <ChatMessages
+        conversationId="conv-1"
+        agentId="agent-1"
+        messages={messages}
+        status="ready"
+      />,
+    );
+
+    const section = screen.getByTestId("mcp-app-section");
+    expect(section).toHaveAttribute("data-app-id", APP_ID);
+    expect(section).toHaveAttribute("data-uri", `ui://archestra-app/${APP_ID}`);
+  });
+
+  it("does not app-bind an external MCP-UI render (non-owned-app URI)", () => {
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-excalidraw__draw",
+            toolCallId: "call-ext-1",
+            state: "output-available",
+            input: {},
+            output: { _meta: { ui: { resourceUri: "ui://excalidraw" } } },
+          },
+        ],
+      },
+    ] as unknown as UIMessage[];
+
+    render(
+      <ChatMessages
+        conversationId="conv-1"
+        agentId="agent-1"
+        messages={messages}
+        status="ready"
+      />,
+    );
+
+    const section = screen.getByTestId("mcp-app-section");
+    expect(section).toHaveAttribute("data-app-id", "");
+    expect(section).toHaveAttribute("data-uri", "ui://excalidraw");
   });
 
   // refine_app/validate_app return an app id but are not rendering tools: they

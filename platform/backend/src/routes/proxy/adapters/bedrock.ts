@@ -51,7 +51,14 @@ type BedrockCommandContext = {
     modelId: string;
     messages: BedrockMessages | undefined;
     system:
-      | Array<{ text?: string; guardContent?: unknown; cachePoint?: unknown }>
+      | Array<{
+          text?: string;
+          guardContent?: unknown;
+          cachePoint?: unknown;
+          // Passthrough for Bedrock-native system blocks we don't model
+          // explicitly (see SystemContentBlockSchema forward-compat fallback).
+          [key: string]: unknown;
+        }>
       | undefined;
     inferenceConfig: BedrockRequest["inferenceConfig"];
     toolConfig:
@@ -967,6 +974,12 @@ class BedrockStreamAdapter
   readonly state: StreamAccumulatorState;
   private currentToolCallIndex = -1;
   private toolNameMapping: ToolNameMapping = createEmptyToolNameMapping();
+  // Set to the refusal text when the streamed response was replaced by a policy
+  // refusal. On a blocked tool-call turn the upstream messageStop was buffered
+  // with the (discarded) tool events, so formatEndSSE must synthesize a terminal
+  // messageStop (end_turn); toProviderResponse persists the refusal, not the
+  // blocked tool calls.
+  private replacedText: string | null = null;
 
   // Bedrock-specific extended state
   private bedrockState: {
@@ -1301,6 +1314,7 @@ class BedrockStreamAdapter
   }
 
   formatCompleteTextSSE(text: string): Uint8Array[] {
+    this.replacedText = text;
     // AWS Event Stream binary format
     return [
       encodeEventStreamMessage("contentBlockStart", {
@@ -1317,9 +1331,26 @@ class BedrockStreamAdapter
     ];
   }
 
-  formatEndSSE(): string {
-    // All events (messageStop, metadata) are passed through in processChunk
-    // Nothing additional needed here
+  formatEndSSE(): string | Uint8Array {
+    // On the normal path, messageStop and metadata are passed through in
+    // processChunk. On a refusal they were buffered with the blocked tool
+    // events and discarded, so synthesize the terminal here or the client
+    // never sees a stream end.
+    if (this.replacedText !== null) {
+      const messageStop = encodeEventStreamMessage("messageStop", {
+        stopReason: "end_turn",
+      });
+      const metadata = encodeEventStreamMessage("metadata", {
+        usage: {
+          inputTokens: this.state.usage?.inputTokens ?? 0,
+          outputTokens: this.state.usage?.outputTokens ?? 0,
+        },
+      });
+      const terminal = new Uint8Array(messageStop.length + metadata.length);
+      terminal.set(messageStop, 0);
+      terminal.set(metadata, messageStop.length);
+      return terminal;
+    }
     return "";
   }
 
@@ -1334,6 +1365,28 @@ class BedrockStreamAdapter
           };
         }
     > = [];
+
+    if (this.replacedText !== null) {
+      return {
+        $metadata: { requestId: this.state.responseId },
+        output: {
+          message: {
+            role: "assistant",
+            content: [{ text: this.replacedText }],
+          },
+        },
+        stopReason: "end_turn",
+        usage: {
+          inputTokens: this.state.usage?.inputTokens ?? 0,
+          outputTokens: this.state.usage?.outputTokens ?? 0,
+        },
+        metrics:
+          this.bedrockState.latencyMs !== null
+            ? { latencyMs: this.bedrockState.latencyMs }
+            : undefined,
+        trace: this.bedrockState.trace ?? undefined,
+      };
+    }
 
     // Add text block if we have text
     if (this.state.text) {
@@ -1560,7 +1613,7 @@ function buildBedrockCommandContext(
         isNova: shouldEncodeHyphens,
       }),
       system: request.system?.map((s) => {
-        if ("text" in s) return { text: s.text };
+        if ("text" in s && typeof s.text === "string") return { text: s.text };
         return s;
       }),
       inferenceConfig: request.inferenceConfig,
@@ -1608,6 +1661,100 @@ export function getCommandInput(request: BedrockRequest): BedrockCommandInput {
 }
 
 // =============================================================================
+// HELPER: Sampling-parameter fallback
+// =============================================================================
+
+/**
+ * Some Bedrock-hosted models (reasoning models in particular) reject sampling
+ * params instead of ignoring them, returning a ValidationException such as
+ * "`temperature` is deprecated for this model." Rather than maintain a brittle
+ * per-model allowlist of which params each model accepts, we detect the
+ * rejection, strip the offending param(s), and retry the request once.
+ *
+ * Maps the wire-level name a provider may use in its error message back to the
+ * corresponding `inferenceConfig` key.
+ */
+const SAMPLING_PARAM_ALIASES: Record<string, "temperature" | "topP"> = {
+  temperature: "temperature",
+  top_p: "topP",
+  topp: "topP",
+};
+
+/**
+ * Inspect an upstream error and return which sampling params it is rejecting.
+ * Only matches "deprecated / not supported" style validation errors so
+ * unrelated failures fall through untouched.
+ */
+function detectUnsupportedSamplingParams(
+  error: unknown,
+): Array<"temperature" | "topP"> {
+  if (!error || typeof error !== "object") return [];
+  const { message, responseBody } = error as {
+    message?: string;
+    responseBody?: string;
+  };
+  const text = `${message ?? ""} ${responseBody ?? ""}`.toLowerCase();
+  if (
+    !/deprecated|not supported|unsupported|does not support|isn't supported|not allowed/.test(
+      text,
+    )
+  ) {
+    return [];
+  }
+  const affected = new Set<"temperature" | "topP">();
+  for (const [alias, key] of Object.entries(SAMPLING_PARAM_ALIASES)) {
+    if (text.includes(alias)) affected.add(key);
+  }
+  return [...affected];
+}
+
+/**
+ * Return a copy of the command input with the given sampling params removed,
+ * dropping `inferenceConfig` entirely once it's empty. Returns null when none
+ * of the params were actually set (so there's nothing worth retrying).
+ */
+function stripSamplingParams(
+  commandInput: BedrockCommandInput,
+  params: Array<"temperature" | "topP">,
+): BedrockCommandInput | null {
+  const inferenceConfig = commandInput.inferenceConfig;
+  if (!inferenceConfig) return null;
+  const present = params.filter((p) => inferenceConfig[p] !== undefined);
+  if (present.length === 0) return null;
+  const next = { ...inferenceConfig };
+  for (const p of present) delete next[p];
+  return {
+    ...commandInput,
+    inferenceConfig: Object.keys(next).length > 0 ? next : undefined,
+  };
+}
+
+/**
+ * Run a Bedrock request and, if it fails solely because the model rejects a
+ * sampling param (temperature/topP), strip that param and retry exactly once.
+ * The retry only runs on an already-failing request, so it adds no latency to
+ * the happy path.
+ */
+async function withSamplingParamFallback<T>(
+  commandInput: BedrockCommandInput,
+  run: (input: BedrockCommandInput) => Promise<T>,
+): Promise<T> {
+  try {
+    return await run(commandInput);
+  } catch (error) {
+    const unsupported = detectUnsupportedSamplingParams(error);
+    if (unsupported.length === 0) throw error;
+    const retryInput = stripSamplingParams(commandInput, unsupported);
+    if (!retryInput) throw error;
+    logger.warn(
+      { modelId: commandInput.modelId, strippedParams: unsupported },
+      "[BedrockAdapter] model rejected sampling param(s); retrying without them",
+    );
+    return run(retryInput);
+  }
+}
+
+// =============================================================================
 // ADAPTER FACTORY
 // =============================================================================
 
@@ -1620,6 +1767,10 @@ export const bedrockAdapterFactory: LLMProvider<
 > = {
   provider: "bedrock",
   interactionType: "bedrock:converse",
+  // Bedrock's custom SigV4 client (BedrockClient) can't self-instrument the
+  // request-duration metric the way fetch/Gemini transports do, so the LLM
+  // proxy handler records `llm_request_duration_seconds` on its behalf.
+  recordRequestDurationInHandler: true,
 
   createRequestAdapter(
     request: BedrockRequest,
@@ -1711,10 +1862,10 @@ export const bedrockAdapterFactory: LLMProvider<
     const { commandInput, toolNameMapping } =
       buildBedrockCommandContext(request);
 
-    // Use fetch-based client.converse()
-    const response = await bedrockClient.converse(
-      request.modelId,
-      commandInput,
+    // Use fetch-based client.converse(), retrying without sampling params the
+    // model rejects (e.g. "`temperature` is deprecated for this model.").
+    const response = await withSamplingParamFallback(commandInput, (input) =>
+      bedrockClient.converse(request.modelId, input),
     );
 
     // Convert response to our internal format with decoded tool names
@@ -1781,8 +1932,12 @@ export const bedrockAdapterFactory: LLMProvider<
     const bedrockClient = client as BedrockClient;
     const { commandInput } = buildBedrockCommandContext(request);
 
-    // Use fetch-based client.converseStream() - returns events with __rawBytes already set
-    return bedrockClient.converseStream(request.modelId, commandInput);
+    // Use fetch-based client.converseStream() - returns events with __rawBytes
+    // already set. Retry without sampling params the model rejects (e.g.
+    // "`temperature` is deprecated for this model.").
+    return withSamplingParamFallback(commandInput, (input) =>
+      bedrockClient.converseStream(request.modelId, input),
+    );
   },
 
   extractInternalCode(error: unknown): ArchestraInternalErrorCode | undefined {

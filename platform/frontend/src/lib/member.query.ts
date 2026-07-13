@@ -30,7 +30,10 @@ export const invitationKeys = {
 
 type MembersQuery = NonNullable<archestraApiTypes.GetMembersData["query"]>;
 type MembersResponse = archestraApiTypes.GetMembersResponses["200"];
-export type Member = MembersResponse["data"][number];
+export type MemoryAccessLevel = "personal" | "team" | "organization";
+export type Member = MembersResponse["data"][number] & {
+  memoryAccessLevel?: MemoryAccessLevel;
+};
 
 type InvitationsQuery = NonNullable<{ limit: number; offset: number }>;
 export type Invitation = {
@@ -136,9 +139,6 @@ export function useInvitationsPaginated(
   });
 }
 
-/**
- * Update a member's role via better-auth
- */
 export function useUpdateMemberRole() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -164,6 +164,50 @@ export function useUpdateMemberRole() {
     },
     onError: (error: Error) => {
       toast.error("Failed to update role", { description: error.message });
+    },
+  });
+}
+
+export function useUpdateMemberMemoryAccess() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      memberId,
+      accessLevel,
+    }: {
+      memberId: string;
+      accessLevel: MemoryAccessLevel;
+    }) => {
+      const response = await fetch(
+        `/api/members/${encodeURIComponent(memberId)}/memory-access`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessLevel }),
+        },
+      );
+
+      if (!response.ok) {
+        let error: unknown;
+        try {
+          error = await response.json();
+        } catch {
+          error = { message: `Request failed (${response.status})` };
+        }
+        throwOnApiError(error);
+      }
+
+      return response.json() as Promise<Member & { memoryAccessLevel: MemoryAccessLevel }>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: memberKeys.lists() });
+      toast.success("Memory access level updated");
+    },
+    onError: (error: Error) => {
+      toast.error("Failed to update memory access", {
+        description: error.message,
+      });
     },
   });
 }

@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/select";
 import { DEFAULT_TABLE_LIMIT } from "@/consts";
 import { useHasPermissions, useSession } from "@/lib/auth/auth.query";
+import { useFeature } from "@/lib/config/config.query";
 import { useDisableInvitations } from "@/lib/config/config.query";
 import {
   useCanImpersonate,
@@ -46,6 +47,7 @@ import {
   useInvitationsPaginated,
   useMembersPaginated,
   useRemoveMember,
+  useUpdateMemberMemoryAccess,
   useUpdateMemberRole,
 } from "@/lib/member.query";
 import {
@@ -215,6 +217,10 @@ function MembersTab({
   });
 
   const updateMemberRole = useUpdateMemberRole();
+  const updateMemberMemoryAccess = useUpdateMemberMemoryAccess();
+  const { data: canUpdateMembers } = useHasPermissions({ member: ["update"] });
+  const { data: isMemoryAdmin } = useHasPermissions({ memory: ["admin"] });
+  const memoryGloballyEnabled = useFeature("memoryEnabled") ?? true;
   const removeMember = useRemoveMember();
   const { data: signupStatus } = useMemberSignupStatus();
   const pendingSignupMembers = signupStatus?.pendingSignupMembers ?? [];
@@ -315,6 +321,43 @@ function MembersTab({
         </Badge>
       ),
     },
+    ...(memoryGloballyEnabled && isMemoryAdmin
+      ? ([
+          {
+            id: "memoryAccess",
+            header: "Memory access",
+            cell: ({ row }) => {
+              const member = row.original;
+              if ("provider" in member) {
+                return <span className="text-sm text-muted-foreground">—</span>;
+              }
+
+              const accessLevel = member.memoryAccessLevel ?? "organization";
+              return (
+                <Select
+                  value={accessLevel}
+                  onValueChange={(value) =>
+                    updateMemberMemoryAccess.mutate({
+                      memberId: member.id,
+                      accessLevel: value as typeof accessLevel,
+                    })
+                  }
+                  disabled={updateMemberMemoryAccess.isPending}
+                >
+                  <SelectTrigger className="w-[160px]" aria-label="Memory access">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="personal">Personal only</SelectItem>
+                    <SelectItem value="team">Team + personal</SelectItem>
+                    <SelectItem value="organization">Organization</SelectItem>
+                  </SelectContent>
+                </Select>
+              );
+            },
+          },
+        ] satisfies ColumnDef<Member | PendingSignupMember>[])
+      : []),
     {
       id: "joined",
       header: "Joined",

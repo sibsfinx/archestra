@@ -100,6 +100,7 @@ export function makeUserPermissions(
     secret: [...ALL],
     optimizationRule: [...ALL],
     scheduledTask: [...ALL],
+    memory: [...ALL, "team-admin"],
     ...overrides,
   };
 }

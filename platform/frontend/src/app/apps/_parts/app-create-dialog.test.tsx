@@ -8,19 +8,21 @@ const { pushMock, createMutateMock, useCreateAppMock } = vi.hoisted(() => ({
   useCreateAppMock: vi.fn(),
 }));
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: pushMock }),
-}));
+vi.mock("next/navigation");
 
 vi.mock("@/lib/app.query", () => ({
   useCreateApp: useCreateAppMock,
 }));
 
+import { useRouter } from "next/navigation";
 import { AppCreateDialog } from "./app-create-dialog";
 
 describe("AppCreateDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(useRouter).mockReturnValue({
+      push: pushMock,
+    } as unknown as ReturnType<typeof useRouter>);
     createMutateMock.mockResolvedValue({
       id: "app-123",
       conversationId: "conv-456",
@@ -54,5 +56,15 @@ describe("AppCreateDialog", () => {
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/a/app-123"));
+  });
+
+  it("does not create an app with a whitespace-only name", async () => {
+    const user = userEvent.setup();
+    render(<AppCreateDialog open onOpenChange={() => {}} />);
+
+    await user.type(screen.getByLabelText("Name"), "   ");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(createMutateMock).not.toHaveBeenCalled();
   });
 });

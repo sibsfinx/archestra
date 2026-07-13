@@ -14,14 +14,7 @@ import { createFastifyInstance } from "@/server";
 import { afterEach, beforeEach, describe, expect, test } from "@/test";
 import type { User } from "@/types";
 
-vi.mock("@/observability", () => ({
-  initializeObservabilityMetrics: vi.fn(),
-  metrics: {
-    llm: { initializeMetrics: vi.fn() },
-    mcp: { initializeMcpMetrics: vi.fn() },
-    agentExecution: { initializeAgentExecutionMetrics: vi.fn() },
-  },
-}));
+vi.mock("@/observability");
 
 describe("agent routes", () => {
   let app: FastifyInstanceWithZod;
@@ -297,6 +290,29 @@ describe("agent routes", () => {
       const agent = response.json();
       expect(agent).toHaveProperty("id");
       expect(agent.name).toBe(updatedName);
+    });
+
+    test("rejects memoryTargetMode that does not match scope", async ({
+      makeAgent,
+    }) => {
+      const created = await makeAgent({
+        name: `Agent Scope Validation ${crypto.randomUUID().slice(0, 8)}`,
+        organizationId,
+        scope: "org",
+        authorId: user.id,
+      });
+
+      const response = await app.inject({
+        method: "PUT",
+        url: `/api/agents/${created.id}`,
+        payload: {
+          scope: "org",
+          memoryTargetMode: "personal",
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toContain("Memory target mode must match the agent scope");
     });
 
     test("rejects an update that sets a model without an API key", async ({

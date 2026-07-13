@@ -44,3 +44,16 @@ export function hasPermissions(
 
   return true;
 }
+
+/** Memory settings: read for normal use, admin to re-enable when org-disabled. */
+export function canAccessMemorySettings(
+  userPermissions: Permissions | undefined,
+): boolean {
+  const memoryActions = userPermissions?.memory;
+  if (!memoryActions) {
+    return false;
+  }
+
+  const actions = memoryActions as readonly string[];
+  return actions.includes("read") || actions.includes("admin");
+}

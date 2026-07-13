@@ -12,7 +12,7 @@ Use this skill before changing files under `platform/frontend/` or frontend-faci
 Run commands from `platform/` unless specifically instructed otherwise.
 
 ```bash
-pnpm codegen:api-client
+pnpm codegen   # regenerates the OpenAPI spec and the API client
 pnpm type-check
 pnpm lint
 pnpm test
@@ -30,7 +30,7 @@ pnpm knip   # flags unused exports; part of frontend check:ci
 ## API clients
 
 - Frontend `.query.ts` files should never use `fetch()` directly.
-- Run `pnpm codegen:api-client` first to ensure the generated SDK is up to date.
+- Run `pnpm codegen` first to ensure the generated SDK is up to date (`codegen:api-client` alone only exists inside `@archestra/shared` and needs the env var: `CODEGEN=true pnpm --filter @archestra/shared codegen:api-client` — without `CODEGEN=true` it reads a live `localhost:9000` instead of the committed spec).
 - Use generated SDK methods instead of manual API calls for type safety and consistency.
 - Reuse API types from `@archestra/shared`, especially `archestraApiTypes` types such as `archestraApiTypes.CreateXxxData["body"]` and `archestraApiTypes.GetXxxResponses["200"]`.
 - Do not define duplicate frontend API types when generated/shared types already exist.
@@ -67,3 +67,9 @@ pnpm knip   # flags unused exports; part of frontend check:ci
 - Use `const appName = useAppName();` and interpolate the app name so white-labeled deployments render correctly.
 - Always use `getDocsUrl(DocsPage.PageName, "optional-anchor")` from `@archestra/shared` for documentation links.
 - Never hardcode documentation URLs.
+
+## Test mocking
+
+- Frequently-mocked modules have Jest-style `__mocks__` canonical mocks — activate with a bare `vi.mock("<specifier>");` and configure per test via `vi.mocked(...)`. Covered: `@/lib/auth/auth.query`, `@/lib/organization.query`, `@/lib/config/config.query`, `@/lib/teams/team.query`, `@/lib/hooks/use-app-name`, `@/lib/clients/auth/auth-client` (a memoized proxy — every path like `authClient.signIn.email` is a stable `vi.fn()`), plus root-level `__mocks__/` for `next/navigation` and `sonner`.
+- Do not write a bespoke partial factory for those specifiers. Exception: a file that partially mocks `@/lib/config/config` may keep factories for the query mocks — the canonical mocks' `importActual` chain eagerly loads `auth-client` → `config/config` and breaks under a partial config mock.
+- The `@` alias must stay declared in `vitest.config.ts` `resolve.alias` with an absolute path — tsconfig-paths-only aliasing silently breaks `__mocks__` resolution (vitest-dev/vitest#8343).

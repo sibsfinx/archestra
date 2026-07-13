@@ -34,6 +34,7 @@ export const oauthConfigSchema = z
     resource: z.string().optional().or(z.literal("")),
     redirect_uris: z.string().optional().or(z.literal("")),
     scopes: z.string().optional().or(z.literal("")),
+    additional_scopes: z.string().optional().or(z.literal("")),
     supports_resource_metadata: z.boolean(),
     authServerUrl: z
       .string()
@@ -237,8 +238,10 @@ export const formSchema = z
       .optional(),
     // Scope for catalog item visibility
     scope: z.enum(["personal", "team", "org"]).optional(),
-    // Team IDs for team-scoped items
-    teams: z.array(z.string()).optional(),
+    // Teams a team-scoped item is shared with, each with its access level
+    teams: z
+      .array(z.object({ id: z.string(), level: z.enum(["use", "write"]) }))
+      .optional(),
     // Deployment environment assignment (null = the default environment)
     environmentId: z.string().uuid().nullable().optional(),
     // Read-only setup instructions (markdown) surfaced from the catalog item.

@@ -5,7 +5,11 @@ import type { A2AAttachment } from "@/agents/a2a-executor";
  * ChatOps provider types enum
  * Used for PG ENUM in database schema
  */
-export const ChatOpsProviderTypeSchema = z.enum(["ms-teams", "slack"]);
+export const ChatOpsProviderTypeSchema = z.enum([
+  "ms-teams",
+  "slack",
+  "telegram",
+]);
 export type ChatOpsProviderType = z.infer<typeof ChatOpsProviderTypeSchema>;
 
 export const ChatOpsConnectionModeSchema = z.enum(["webhook", "socket"]);
@@ -33,6 +37,8 @@ export const ChatOpsDmInfoSchema = z
     botUserId: z.string().optional(),
     teamId: z.string().optional(),
     appId: z.string().optional(),
+    /** Telegram bot username, used to build t.me deep links */
+    botUsername: z.string().optional(),
   })
   .optional();
 
@@ -49,6 +55,44 @@ export const ChatOpsProviderInfoSchema = z.object({
 export const ChatOpsStatusResponseSchema = z.object({
   providers: z.array(ChatOpsProviderInfoSchema),
 });
+
+/**
+ * Why an attached file was not included in the message sent to the model.
+ * - `too_large`: exceeded the per-file size limit (and, for images, could not
+ *   be shrunk under the model's inline-image limit).
+ * - `download_failed`: the provider download failed (auth, network, or a
+ *   non-file response such as an HTML login page).
+ * - `total_limit_reached`: the combined attachment budget was already spent.
+ * - `too_many`: more files than the per-message cap were attached.
+ */
+export type SkippedAttachmentReason =
+  | "too_large"
+  | "download_failed"
+  | "total_limit_reached"
+  | "too_many";
+
+/**
+ * A file that was attached to a message but not delivered to the model. Carried
+ * so the chatops layer can tell the model, in-context, that a file was dropped
+ * and why — otherwise the model has no idea the file existed and denies it.
+ */
+export interface SkippedAttachment {
+  /** Filename from the provider, when known. */
+  name?: string;
+  /** Size in bytes from provider metadata, when known. */
+  sizeBytes?: number;
+  reason: SkippedAttachmentReason;
+}
+
+/**
+ * Per-input-file result of downloading thread-history files. The returned
+ * array is positionally aligned with the input: `outcomes[i]` describes
+ * `files[i]`, so callers can attribute every skip back to the history turn
+ * the file came from.
+ */
+export type ThreadFileOutcome =
+  | { status: "delivered"; attachment: A2AAttachment }
+  | { status: "skipped"; skipped: SkippedAttachment };
 
 /**
  * Represents an incoming chat message from a chatops provider
@@ -80,6 +124,8 @@ export interface IncomingChatMessage {
   metadata?: Record<string, unknown>;
   /** Attachments from the message (images, files, etc.) */
   attachments?: A2AAttachment[];
+  /** Files that were attached but could not be delivered to the model. */
+  skippedAttachments?: SkippedAttachment[];
 }
 
 /**
@@ -397,6 +443,13 @@ export interface ChatOpsProvider {
   getUserEmail(userId: string): Promise<string | null>;
 
   /**
+   * Provider-specific guidance shown when the sender's identity cannot be
+   * resolved. Providers with no email concept (e.g. Telegram, where users must
+   * link their account first) override the generic manager message.
+   */
+  identityVerificationFailureText?(): string;
+
+  /**
    * Get user's display name from their provider-specific ID.
    * Used for auto-provisioning to set a meaningful user name.
    * @param userId - The user's ID in the provider's system
@@ -426,6 +479,12 @@ export interface ChatOpsProvider {
     userId: string;
     userName: string;
     responseUrl: string;
+    /**
+     * Whether the selection happened in a DM. Providers whose channel IDs
+     * don't encode this (e.g. Telegram's numeric chat IDs) set it explicitly;
+     * when absent the manager falls back to Slack's "D"-prefix convention.
+     */
+    isDm?: boolean;
   } | null;
 
   /**
@@ -475,9 +534,11 @@ export interface ChatOpsProvider {
    * Download files from thread history messages.
    * Reuses the provider's existing download logic (auth headers, SSRF protection, etc.).
    * @param files - File metadata from thread history messages
-   * @returns Downloaded attachments in A2A format (base64-encoded)
+   * @returns One outcome per input file, positionally aligned with `files`:
+   * either the downloaded attachment (base64-encoded A2A format) or the
+   * skip record explaining why it was not delivered
    */
-  downloadFiles(files: ChatThreadMessageFile[]): Promise<A2AAttachment[]>;
+  downloadFiles(files: ChatThreadMessageFile[]): Promise<ThreadFileOutcome[]>;
 
   /**
    * Discover all channels in a workspace/team.
@@ -551,6 +612,13 @@ export interface SlackDbConfig {
   appId: string;
   connectionMode?: ChatOpsConnectionMode;
   appLevelToken?: string;
+}
+
+/** Telegram config stored as a DB secret */
+export interface TelegramDbConfig {
+  enabled: boolean;
+  /** Bot token from @BotFather */
+  botToken: string;
 }
 
 /** ngrok tunnel config stored as a DB secret */

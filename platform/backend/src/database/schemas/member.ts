@@ -32,6 +32,11 @@ const member = pgTable(
       () => llmProviderApiKeysTable.id,
       { onDelete: "set null" },
     ),
+    /** Gates which memory visibilities this member can read, inject, and search. */
+    memoryAccessLevel: text("memory_access_level")
+      .default("organization")
+      .notNull()
+      .$type<"personal" | "team" | "organization">(),
   },
   (table) => ({
     userOrganizationIdx: index("member_user_id_organization_id_idx").on(

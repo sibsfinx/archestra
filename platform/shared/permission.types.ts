@@ -21,6 +21,7 @@ export const actions = [
   "query",
   "execute",
   "deploy-to-restricted",
+  "manage",
 ] as const;
 
 export const resources = [
@@ -38,11 +39,13 @@ export const resources = [
   "mcpServerInstallation",
   "knowledgeSource",
   "knowledgeSettings",
+  "memory",
   "mcpServerInstallationRequest",
   "environment",
   "githubAppConfig",
   "chat",
   "project",
+  "file",
   "llmCost",
   "llmLimit",
   "optimizationRule",
@@ -103,6 +106,7 @@ export const resourceLabels: Record<Resource, string> = {
   mcpServerInstallation: "MCP Server Installations",
   knowledgeSource: "Knowledge Sources",
   knowledgeSettings: "Knowledge Settings",
+  memory: "Memory",
   mcpServerInstallationRequest: "MCP Server Installation Requests",
   environment: "Environments",
   githubAppConfig: "GitHub App Configurations",
@@ -110,6 +114,7 @@ export const resourceLabels: Record<Resource, string> = {
   ac: "Roles",
   chat: "Chats",
   project: "Projects",
+  file: "Files",
   llmCost: "LLM Costs",
   llmLimit: "LLM Limits",
   optimizationRule: "Optimization Rules",
@@ -147,6 +152,7 @@ export const resourceDescriptions: Record<Resource, string> = {
   log: "LLM proxy and MCP tool call logs",
   chat: "Chat conversations",
   project: "Projects — shared collections of chats with a result folder",
+  file: "Files produced and used in chats and projects",
   agentTrigger: "Agent triggers (Slack, MS Teams, incoming emails)",
   scheduledTask: "Scheduled agent tasks that run on a schedule",
   llmProviderApiKey: "LLM provider API keys and their visibility",
@@ -156,7 +162,7 @@ export const resourceDescriptions: Record<Resource, string> = {
   llmLimit: "LLM usage limits",
   llmSettings: "LLM settings (compression, cleanup interval)",
   agentSettings:
-    "Agent settings (default model, default agent, security engine, chat file uploads)",
+    "Agent settings (default model, default agent, default tool guardrails, chat file uploads)",
   llmCost: "LLM usage and cost analytics",
   mcpRegistry: "MCP server registry management",
   mcpServerInstallation: "Installed MCP servers and their runtime",
@@ -181,6 +187,8 @@ export const resourceDescriptions: Record<Resource, string> = {
     "Knowledge sources including knowledge bases and connectors for RAG-based document retrieval",
   knowledgeSettings:
     "Knowledge settings (embedding and reranking models configuration)",
+  memory:
+    "Durable agent memory entries (personal, team, and organization scopes)",
   simpleView: "Controls if the simple view of the app is enabled",
   chatAgentPicker: "Controls visibility of the agent picker in chat",
   chatProviderSettings:
@@ -231,10 +239,11 @@ export const resourceCategories: Record<string, Resource[]> = {
     "llmSettings",
     "llmCost",
   ],
-  Knowledge: ["knowledgeSource", "knowledgeSettings"],
+  Knowledge: ["knowledgeSource", "knowledgeSettings", "memory"],
   Other: [
     "chat",
     "project",
+    "file",
     "log",
     "simpleView",
     "chatAgentPicker",

@@ -26,6 +26,7 @@ import {
   makeLlmProviderApiKey,
   virtualKeysSeed,
 } from "./data/llm-keys";
+import { type MockMemory, makeMemory, memoriesSeed } from "./data/memory";
 import {
   appearanceSettingsSeed,
   organizationSeed,
@@ -101,7 +102,37 @@ export const handlers: HttpHandler[] = [
   ...getJson("/health", healthSeed),
   ...getJson("/api/organization", organizationSeed),
   ...getJson("/api/organization/appearance-settings", appearanceSettingsSeed),
+  // Onboarding nudges: everything already seen / nothing eligible, so neither
+  // the red dots nor the survey/feedback dialogs interfere with other tests.
+  ...getJson("/api/onboarding/seen-nav-items", {
+    items: [
+      "nav:projects",
+      "nav:apps",
+      "nav:connect",
+      "nav:model-providers",
+      "nav:mcp-registry",
+      "feedback:popup",
+    ],
+  }),
+  ...postJson("/api/onboarding/seen-nav-items", { items: [] }),
+  ...getJson("/api/onboarding/survey-eligibility", { eligible: false }),
+  ...postJson("/api/onboarding/survey", { ok: true }),
+  ...getJson("/api/onboarding/feedback-popup-activation", {
+    activatedAt: null,
+  }),
   ...getJson("/api/organization/mcp-preset-entries", []),
+  ...getJson("/api/projects", []),
+  ...getJson("/api/apps", {
+    data: [],
+    pagination: {
+      currentPage: 1,
+      limit: 100,
+      total: 0,
+      totalPages: 0,
+      hasNext: false,
+      hasPrev: false,
+    },
+  }),
   // Fetched by the catalog form's Environment selector (and the Environments
   // section). Empty list keeps the strict unhandled-request guard satisfied.
   ...getJson("/api/environments", {
@@ -304,4 +335,62 @@ export const handlers: HttpHandler[] = [
   ...getJson("/api/knowledge-bases", []),
   ...getJson("/api/connectors", []),
   ...getJson("/api/identity-providers", []),
+
+  // Durable memory settings page
+  ...paired("/api/memory").map((url) =>
+    http.get(url, ({ request }) => {
+      const params = new URL(request.url).searchParams;
+      const visibility = params.get("visibility");
+      const rows = visibility
+        ? memoriesSeed.filter((row) => row.visibility === visibility)
+        : memoriesSeed;
+      return HttpResponse.json({ data: rows });
+    }),
+  ),
+  ...paired("/api/memory").map((url) =>
+    http.post(url, async ({ request }) => {
+      const body = (await request.json()) as {
+        content: string;
+        visibility?: MockMemory["visibility"];
+        tier?: MockMemory["tier"];
+        teamId?: string | null;
+      };
+      const row = makeMemory({
+        content: body.content,
+        visibility: body.visibility ?? "personal",
+        tier: body.tier ?? "core",
+        teamId: body.teamId ?? null,
+      });
+      memoriesSeed.push(row);
+      return HttpResponse.json(row, { status: 201 });
+    }),
+  ),
+  ...paired("/api/memory/:id").map((url) =>
+    http.patch(url, async ({ request, params }) => {
+      const body = (await request.json()) as { content?: string };
+      const row = memoriesSeed.find((entry) => entry.id === params.id);
+      if (!row) {
+        return HttpResponse.json(
+          { error: { message: "not found", type: "test" } },
+          { status: 404 },
+        );
+      }
+      if (body.content) row.content = body.content;
+      row.updatedAt = new Date().toISOString();
+      return HttpResponse.json(row);
+    }),
+  ),
+  ...paired("/api/memory/:id").map((url) =>
+    http.delete(url, ({ params }) => {
+      const index = memoriesSeed.findIndex((entry) => entry.id === params.id);
+      if (index === -1) {
+        return HttpResponse.json(
+          { error: { message: "not found", type: "test" } },
+          { status: 404 },
+        );
+      }
+      memoriesSeed.splice(index, 1);
+      return HttpResponse.json({ success: true });
+    }),
+  ),
 ];

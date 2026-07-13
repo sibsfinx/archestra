@@ -45,6 +45,11 @@ const PAGE_CONFIG: Record<string, { title: string; description: string }> = {
     description:
       "Configure embedding, reranking, and knowledge system defaults.",
   },
+  "/settings/memory": {
+    title: "Memory",
+    description:
+      "Manage durable facts agents can recall — personal, team, and organization scope.",
+  },
   "/settings/llm": {
     title: "LLM",
     description:

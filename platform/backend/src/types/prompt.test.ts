@@ -140,6 +140,21 @@ describe("InsertAgentSchema", () => {
         expect(result.error.issues[0].message).toContain("253 characters");
       }
     });
+
+    it("rejects memory target mode that differs from scope", () => {
+      const result = InsertAgentSchema.safeParse({
+        name: "Test Agent",
+        scope: "org",
+        memoryTargetMode: "personal",
+        teams: [],
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0].message).toContain(
+          "Memory target mode must match the agent scope",
+        );
+      }
+    });
   });
 });
 
@@ -187,6 +202,20 @@ describe("UpdateAgentSchema", () => {
         incomingEmailSecurityMode: "public",
       });
       expect(result.success).toBe(true);
+    });
+
+    it("rejects memory target mode that differs from scope", () => {
+      const result = UpdateAgentSchema.safeParse({
+        scope: "team",
+        memoryTargetMode: "org",
+        teams: [],
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0].message).toContain(
+          "Memory target mode must match the agent scope",
+        );
+      }
     });
   });
 });

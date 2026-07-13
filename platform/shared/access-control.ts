@@ -54,10 +54,12 @@ export const allAvailableActions: Record<Resource, Action[]> = {
 
   // Knowledge
   knowledgeSource: ["read", "create", "update", "delete", "query", "admin"],
+  memory: ["read", "create", "update", "delete", "team-admin", "admin"],
 
   // Other
   chat: ["read", "create", "update", "delete"],
   project: ["read", "create", "update", "delete", "admin"],
+  file: ["manage"],
   log: ["read"],
 
   // Administration (overrides better-auth defaults to add "read" where needed)
@@ -119,10 +121,12 @@ export const editorPermissions: Record<Resource, Action[]> = {
 
   // Knowledge
   knowledgeSource: ["read", "create", "update", "delete", "query"],
+  memory: ["read", "create", "update", "delete", "team-admin"],
 
   // Other
   chat: ["read", "create", "update", "delete"],
   project: ["read", "create", "update", "delete"],
+  file: ["manage"],
   log: ["read"],
 
   // Administration (overrides better-auth defaults to add "read" where needed)
@@ -190,10 +194,12 @@ export const memberPermissions: Record<Resource, Action[]> = {
 
   // Knowledge
   knowledgeSource: ["read", "query"],
+  memory: ["read", "create", "update", "delete"],
 
   // Other
   chat: ["read", "create", "update", "delete"],
   project: ["read", "create", "update", "delete"],
+  file: ["manage"],
   log: [],
 
   // Administration (overrides better-auth defaults to add "read" where needed)
@@ -382,6 +388,7 @@ export const permissionDescriptions: Record<string, string> = {
   "project:delete": "Delete projects",
   "project:admin":
     "Oversee projects owned by other members: discover them, view/edit/delete the project and its sharing, and view, download, or delete their files — but not read their chats. Additive: edit/delete still require project:update/delete, and schedule management rides scheduledTask:admin (all included in the Admin role).",
+  "file:manage": "List, read, write, and delete files in chats and projects",
   "log:read": "View LLM proxy and MCP tool call logs",
 
   // Administration
@@ -429,6 +436,12 @@ export const permissionDescriptions: Record<string, string> = {
     "View knowledge settings (embedding and reranking models)",
   "knowledgeSettings:update":
     "Modify knowledge settings (embedding and reranking models)",
+  "memory:read": "View memory entries within your scope",
+  "memory:create": "Create memory entries within your scope",
+  "memory:update": "Update memory entries within your scope",
+  "memory:delete": "Delete memory entries within your scope",
+  "memory:team-admin": "Manage team-scoped memory entries in your teams",
+  "memory:admin": "Manage organization-scoped memory and bypass scope restrictions",
 
   // UI behavior
   "simpleView:enable": "Sidebar is collapsed by default on page load",
@@ -1054,6 +1067,9 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.UpdateSecuritySettings]: {
     agentSettings: ["update"],
   },
+  [RouteId.UpdateMemorySettings]: {
+    memory: ["admin"],
+  },
   [RouteId.UpdateLlmSettings]: {
     llmSettings: ["update"],
   },
@@ -1158,6 +1174,7 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.GetOnboardingStatus]: {}, // Onboarding status route - available to all authenticated users (no specific permissions required)
   [RouteId.GetMemberSignupStatus]: {}, // Member signup status - available to all authenticated users
   [RouteId.GetMembers]: { member: ["read"] }, // List organization members (paginated)
+  [RouteId.UpdateMemberMemoryAccess]: { memory: ["admin"] },
   [RouteId.GetOrganizationMembers]: { member: ["read"] }, // List organization members
   [RouteId.GetOrganizationMember]: { member: ["read"] }, // Get organization member by ID or email
   [RouteId.DeletePendingSignupMember]: { member: ["delete"] }, // Delete auto-provisioned member who hasn't signed up
@@ -1318,6 +1335,12 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.GetConnectorRuns]: { knowledgeSource: ["read"] },
   [RouteId.GetConnectorRun]: { knowledgeSource: ["read"] },
 
+  // Memory Routes - per-instance scope is enforced in the handlers
+  [RouteId.GetMemories]: { memory: ["read"] },
+  [RouteId.CreateMemory]: { memory: ["create"] },
+  [RouteId.UpdateMemory]: { memory: ["update"] },
+  [RouteId.DeleteMemory]: { memory: ["delete"] },
+
   // Agent Skill Routes - per-instance scope is enforced in the handlers
   [RouteId.GetSkills]: { skill: ["read"] },
   [RouteId.CreateSkill]: { skill: ["create"] },
@@ -1354,18 +1377,13 @@ export const requiredEndpointPermissionsMap: Partial<
   [RouteId.SetProjectShare]: { project: ["update"] },
   [RouteId.DeleteProject]: { project: ["delete"] },
   [RouteId.GetProjectConversations]: { project: ["read"] },
-  // The file list is part of the PFS surface, so it requires the same
-  // `sandbox:execute` as the byte endpoint that serves these files
-  // (GetSkillSandboxArtifact) — otherwise a role could list files marked
-  // `downloadable` and then 403 on every fetch. Project membership is still
-  // enforced in the handler (projectService.listFiles -> requireReadable).
-  [RouteId.GetProjectFiles]: { project: ["read"], sandbox: ["execute"] },
-  // Uploading a project file mirrors how files are produced in a project today
-  // (a sandbox run writing a result), so it carries the same `sandbox:execute`
-  // as the list/byte surfaces. Project membership (owner/shared, not admin
-  // oversight) is enforced in the handler (projectService.uploadFile ->
-  // requireReadable).
-  [RouteId.UploadProjectFiles]: { project: ["read"], sandbox: ["execute"] },
+  // Project file surfaces combine project-level access with the files gate:
+  // `file:manage` covers the file operations, while project membership is
+  // still enforced in the handler (projectService.listFiles/uploadFile ->
+  // requireReadable). Note the artifact byte endpoint that serves file
+  // contents (GetSkillSandboxArtifact) stays on `sandbox:execute`.
+  [RouteId.GetProjectFiles]: { project: ["read"], file: ["manage"] },
+  [RouteId.UploadProjectFiles]: { project: ["read"], file: ["manage"] },
   // Instructions are plain project metadata (not a sandbox byte surface), so the
   // GET needs only project read — every project reader can see the instructions
   // that steer the project's chats. Editing is owner-only, enforced in the
@@ -1517,6 +1535,7 @@ export const requiredPagePermissionsMap: Record<string, Permissions> = {
   "/settings/agents": { agentSettings: ["read"] },
   "/settings/environments": { environment: ["admin"] },
   "/settings/knowledge": { knowledgeSettings: ["read"] },
+  "/settings/memory": { memory: ["read"] },
   "/settings/users": { member: ["read"] },
   "/settings/teams": { team: ["read"] },
   "/settings/roles": { ac: ["read"] },

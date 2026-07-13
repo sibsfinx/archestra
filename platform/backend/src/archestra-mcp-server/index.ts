@@ -6,13 +6,15 @@ import {
   getArchestraToolShortName,
   isAgentTool,
   PROJECTS_FILE_ARCHESTRA_TOOL_SHORT_NAMES,
+  TOOL_MEMORY_SHORT_NAME,
   TOOL_RUN_TOOL_SHORT_NAME,
   TOOL_SEARCH_TOOLS_SHORT_NAME,
 } from "@archestra/shared";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { ZodError, type ZodType } from "zod";
+import { ZodError, type ZodType, z } from "zod";
 import config from "@/config";
 import { ToolModel } from "@/models";
+import OrganizationModel from "@/models/organization";
 // Import all groups
 import { toolEntries as agentToolEntries, tools as agentTools } from "./agents";
 import {
@@ -56,6 +58,10 @@ import {
   toolEntries as mcpServerToolEntries,
   tools as mcpServerTools,
 } from "./mcp-servers";
+import {
+  toolEntries as memoryToolEntries,
+  tools as memoryTools,
+} from "./memory";
 import {
   toolEntries as policyToolEntries,
   tools as policyTools,
@@ -102,6 +108,7 @@ const toolEntries: Partial<
   ...policyToolEntries,
   ...toolAssignmentToolEntries,
   ...knowledgeManagementToolEntries,
+  ...memoryToolEntries,
   ...chatToolEntries,
   ...projectToolEntries,
   ...searchToolEntries,
@@ -130,6 +137,14 @@ const projectGatedSandboxFullNames = new Set<string>(
   PROJECTS_FILE_ARCHESTRA_TOOL_SHORT_NAMES.map(getArchestraToolFullName),
 );
 
+function isMemoryToolName(toolName: string | undefined): boolean {
+  if (!toolName) {
+    return false;
+  }
+  const shortName = getArchestraToolShortName(toolName);
+  return shortName === TOOL_MEMORY_SHORT_NAME;
+}
+
 // The dedicated Projects tool group (create_project_from_conversation).
 // Registered above for unit tests, but hidden and non-dispatchable when the
 // projects feature is dark.
@@ -148,6 +163,7 @@ export function getArchestraMcpTools() {
     ...policyTools,
     ...toolAssignmentTools,
     ...knowledgeManagementTools,
+    ...(config.memory.enabled ? memoryTools : []),
     ...chatTools,
     ...(config.projects.enabled ? projectTools : []),
     ...searchToolTools,
@@ -180,6 +196,23 @@ export function getArchestraMcpTools() {
   });
 }
 
+export function getArchestraToolInputSchema(
+  toolName: string,
+): Record<string, unknown> | undefined {
+  const shortName = archestraMcpBranding.getToolShortName(toolName);
+  if (!shortName) {
+    return undefined;
+  }
+  const entry = toolEntries[getArchestraToolFullName(shortName)];
+  if (!entry) {
+    return undefined;
+  }
+  return z.toJSONSchema(entry.schema, { io: "input" }) as Record<
+    string,
+    unknown
+  >;
+}
+
 export async function executeArchestraTool(
   toolName: string,
   args: Record<string, unknown> | undefined,
@@ -202,6 +235,8 @@ export async function executeArchestraTool(
   // Centralized RBAC check — ensures the user has the required permission
   const rbacDenied = await checkToolPermission(toolName, context);
   if (rbacDenied) return rbacDenied;
+
+  await rejectIfMemoryToolDisabled(toolName, context);
 
   // Centralized assignment check — an agent may only execute Archestra tools
   // that are actually assigned to it (the same set advertised by tools/list and
@@ -343,6 +378,39 @@ function resolveArchestraToolName(toolName: string): string | null {
   }
 
   return getArchestraToolFullName(shortName);
+}
+
+function throwMemoryToolNotFound(toolName: string): never {
+  throw {
+    code: -32601,
+    message: `No tool named "${toolName}" exists. ${toolDiscoverySteer()}`,
+  };
+}
+
+async function rejectIfMemoryToolDisabled(
+  toolName: string,
+  context: ArchestraContext,
+): Promise<void> {
+  const resolvedToolName =
+    toolEntries[toolName as ArchestraToolFullName] != null
+      ? toolName
+      : resolveArchestraToolName(toolName);
+  if (!resolvedToolName || !isMemoryToolName(resolvedToolName)) {
+    return;
+  }
+
+  if (!config.memory.enabled) {
+    throwMemoryToolNotFound(toolName);
+  }
+
+  if (!context.organizationId) {
+    return;
+  }
+
+  const organization = await OrganizationModel.getById(context.organizationId);
+  if (organization?.memoryEnabled !== true) {
+    throwMemoryToolNotFound(toolName);
+  }
 }
 
 function validateToolResult(
