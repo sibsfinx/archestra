@@ -37,7 +37,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { SecretInput, SecretTextarea } from "@/components/ui/secret-input";
 import { useCreateConnector } from "@/lib/knowledge/connector.query";
 import {
   CONNECTOR_OPTIONS,
@@ -221,6 +221,7 @@ export function CreateConnectorDialog({
                     size="icon"
                     className="h-7 w-7"
                     onClick={handleBackToChooser}
+                    aria-label="Go back"
                   >
                     <ArrowLeft className="h-4 w-4" />
                   </Button>
@@ -284,6 +285,7 @@ export function CreateConnectorDialog({
                     size="icon"
                     className="h-7 w-7"
                     onClick={handleBack}
+                    aria-label="Go back"
                   >
                     <ArrowLeft className="h-4 w-4" />
                   </Button>
@@ -415,21 +417,14 @@ export function CreateConnectorDialog({
                         <FormLabel>{apiTokenLabel}</FormLabel>
                         <FormControl>
                           {apiTokenMultiline ? (
-                            <Textarea
+                            <SecretTextarea
                               placeholder={apiTokenPlaceholder}
                               rows={5}
-                              autoComplete="new-password"
-                              data-1p-ignore
-                              data-lpignore="true"
                               {...field}
                             />
                           ) : (
-                            <Input
-                              type="password"
+                            <SecretInput
                               placeholder={apiTokenPlaceholder}
-                              autoComplete="new-password"
-                              data-1p-ignore
-                              data-lpignore="true"
                               {...field}
                             />
                           )}

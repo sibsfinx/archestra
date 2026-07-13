@@ -9,6 +9,10 @@ import type {
   UpdateMemory,
 } from "@/types/memory";
 import {
+  MEMORY_INJECTION_TOTAL_CAP,
+  mergeCoreMemoriesForInjection,
+} from "./memory-injection";
+import {
   buildAgentAwareMemoryReadCondition,
   buildMemoryReadScopeCondition,
   intersectReadableTeamIds,
@@ -17,10 +21,6 @@ import {
   resolveAgentMemoryTargetMode,
   resolveMemoryAccessLevel,
 } from "./memory-scope-access";
-import {
-  MEMORY_INJECTION_TOTAL_CAP,
-  mergeCoreMemoriesForInjection,
-} from "./memory-injection";
 
 class MemoryModel {
   static async listReadable(params: {

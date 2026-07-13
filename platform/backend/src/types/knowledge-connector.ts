@@ -48,6 +48,9 @@ export const ConnectorSyncStatusSchema = z.enum([
   "completed_with_errors",
   "failed",
   "partial",
+  // A newer sync run for the same connector replaced this one. Distinct from
+  // "failed" so it can be surfaced as an informational (not error) state.
+  "superseded",
 ]);
 export type ConnectorSyncStatus = z.infer<typeof ConnectorSyncStatusSchema>;
 
@@ -362,6 +365,10 @@ export const WebCrawlerConfigSchema = z.object({
   batchSize: z.number().int().min(1).max(100).optional(),
   requestDelayMs: z.number().int().min(0).max(10_000).optional(),
   userAgent: z.string().min(1).optional(),
+  // Off by default: the crawler refuses hosts that resolve to private/internal
+  // addresses to guard against SSRF. Enable only for internal sites the
+  // Archestra workers are meant to reach.
+  allowPrivateNetwork: z.boolean().optional(),
 });
 export type WebCrawlerConfig = z.infer<typeof WebCrawlerConfigSchema>;
 

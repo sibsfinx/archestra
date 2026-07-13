@@ -16,10 +16,15 @@ const {
   unassignToolFromApp,
   openAppInChat,
   openExternalAppInChat,
+  pinApp,
+  unpinApp,
+  pinExternalApp,
+  unpinExternalApp,
 } = archestraApiSdk;
 
 type AppsQuery = NonNullable<archestraApiTypes.GetAppsData["query"]>;
 type AppsParams = Pick<AppsQuery, "limit" | "offset" | "search">;
+type AppDetailQueryOptions = { toastOnError?: boolean };
 
 // ===== Query hooks =====
 
@@ -42,7 +47,11 @@ export function useApps(
 
 // Resolves an external UI-providing app by catalog id: its UI resource plus the
 // caller's accessible installs and default install for the run-page selector.
-export function useExternalApp(catalogId: string | null) {
+export function useExternalApp(
+  catalogId: string | null,
+  options?: AppDetailQueryOptions,
+) {
+  const toastOnError = options?.toastOnError;
   return useQuery({
     queryKey: ["apps", "external", catalogId],
     enabled: !!catalogId,
@@ -50,13 +59,14 @@ export function useExternalApp(catalogId: string | null) {
       const { data, error } = await getExternalApp({
         path: { catalogId: catalogId as string },
       });
-      throwOnApiError(error, { allowNotFound: true });
+      throwOnApiError(error, { allowNotFound: true, toastOnError });
       return data ?? null;
     },
   });
 }
 
-export function useApp(appId: string | null) {
+export function useApp(appId: string | null, options?: AppDetailQueryOptions) {
+  const toastOnError = options?.toastOnError;
   return useQuery({
     queryKey: ["apps", appId],
     enabled: !!appId,
@@ -64,7 +74,7 @@ export function useApp(appId: string | null) {
       const { data, error } = await getApp({
         path: { appId: appId as string },
       });
-      throwOnApiError(error, { allowNotFound: true });
+      throwOnApiError(error, { allowNotFound: true, toastOnError });
       return data ?? null;
     },
   });
@@ -136,8 +146,11 @@ export function useOpenAppInChat() {
 }
 
 // Opens an external (MCP-server) app in chat against a concrete install: the
-// backend seeds a conversation with the UI rendered inline and returns its id.
-// The caller navigates to `/chat/<conversationId>` on success.
+// backend creates a conversation and returns its id plus how it was set up —
+// `mode: "render"` (UI seeded inline) or `mode: "prompt"` (empty conversation
+// plus an opening prompt for the caller to send, used when the tool has
+// required inputs). The caller navigates to `/chat/<conversationId>` on
+// success.
 export function useOpenExternalAppInChat() {
   return useMutation({
     mutationFn: async (params: {
@@ -153,6 +166,52 @@ export function useOpenExternalAppInChat() {
         return null;
       }
       return data;
+    },
+  });
+}
+
+/**
+ * The identity of a pinnable Apps-surface item, matching the list's
+ * discriminated union: owned apps by id, external apps by (install, resource).
+ */
+export type PinAppTarget =
+  | { source: "owned"; appId: string }
+  | { source: "external"; mcpServerId: string; resourceUri: string };
+
+/** Pin/unpin an app for the current user (personal — toggle by `pinned`). */
+export function usePinApp() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      pinned,
+      target,
+    }: {
+      pinned: boolean;
+      target: PinAppTarget;
+    }) => {
+      const { error } =
+        target.source === "owned"
+          ? pinned
+            ? await pinApp({ path: { appId: target.appId } })
+            : await unpinApp({ path: { appId: target.appId } })
+          : pinned
+            ? await pinExternalApp({
+                path: { mcpServerId: target.mcpServerId },
+                body: { resourceUri: target.resourceUri },
+              })
+            : await unpinExternalApp({
+                path: { mcpServerId: target.mcpServerId },
+                query: { resourceUri: target.resourceUri },
+              });
+      if (error) {
+        handleApiError(error);
+        return null;
+      }
+      return true;
+    },
+    onSuccess: (ok) => {
+      if (!ok) return;
+      queryClient.invalidateQueries({ queryKey: ["apps"] });
     },
   });
 }

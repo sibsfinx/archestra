@@ -11,7 +11,7 @@ import {
   TOOL_SEARCH_TOOLS_SHORT_NAME,
 } from "@archestra/shared";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { ZodError, type ZodType } from "zod";
+import { ZodError, type ZodType, z } from "zod";
 import config from "@/config";
 import { ToolModel } from "@/models";
 import OrganizationModel from "@/models/organization";
@@ -194,6 +194,23 @@ export function getArchestraMcpTools() {
       name: archestraMcpBranding.getToolName(shortName),
     };
   });
+}
+
+export function getArchestraToolInputSchema(
+  toolName: string,
+): Record<string, unknown> | undefined {
+  const shortName = archestraMcpBranding.getToolShortName(toolName);
+  if (!shortName) {
+    return undefined;
+  }
+  const entry = toolEntries[getArchestraToolFullName(shortName)];
+  if (!entry) {
+    return undefined;
+  }
+  return z.toJSONSchema(entry.schema, { io: "input" }) as Record<
+    string,
+    unknown
+  >;
 }
 
 export async function executeArchestraTool(

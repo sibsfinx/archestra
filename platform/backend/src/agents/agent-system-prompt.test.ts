@@ -12,8 +12,16 @@ vi.mock("@/logging", () => ({
 
 import {
   ADMIN_ROLE_NAME,
+  type ArchestraToolShortName,
   SYSTEM_PROMPT_VARIABLE_EXPRESSIONS,
+  TOOL_DOWNLOAD_FILE_SHORT_NAME,
   TOOL_LOAD_SKILL_SHORT_NAME,
+  TOOL_READ_FILE_SHORT_NAME,
+  TOOL_RUN_COMMAND_SHORT_NAME,
+  TOOL_SAVE_FILE_SHORT_NAME,
+  TOOL_SCAFFOLD_APP_SHORT_NAME,
+  TOOL_SEARCH_FILES_SHORT_NAME,
+  TOOL_UPLOAD_FILE_SHORT_NAME,
 } from "@archestra/shared";
 import type { Tool } from "ai";
 import { archestraMcpBranding } from "@/archestra-mcp-server";
@@ -35,6 +43,25 @@ const loadSkillToolName = archestraMcpBranding.getToolName(
 );
 const someTool: Record<string, Tool> = { some_tool: {} as Tool };
 const withLoadSkill: Record<string, Tool> = { [loadSkillToolName]: {} as Tool };
+
+const brand = (shortName: ArchestraToolShortName) =>
+  archestraMcpBranding.getToolName(shortName);
+const searchFilesToolName = brand(TOOL_SEARCH_FILES_SHORT_NAME);
+// Sandbox runtime + persistent-file tools: the "full" file surface.
+const withFileTools: Record<string, Tool> = {
+  [brand(TOOL_RUN_COMMAND_SHORT_NAME)]: {} as Tool,
+  [brand(TOOL_DOWNLOAD_FILE_SHORT_NAME)]: {} as Tool,
+  [brand(TOOL_UPLOAD_FILE_SHORT_NAME)]: {} as Tool,
+  [searchFilesToolName]: {} as Tool,
+  [brand(TOOL_READ_FILE_SHORT_NAME)]: {} as Tool,
+  [brand(TOOL_SAVE_FILE_SHORT_NAME)]: {} as Tool,
+};
+// Sandbox runtime only (Projects off): no persistent-file tools.
+const withSandboxOnly: Record<string, Tool> = {
+  [brand(TOOL_RUN_COMMAND_SHORT_NAME)]: {} as Tool,
+  [brand(TOOL_DOWNLOAD_FILE_SHORT_NAME)]: {} as Tool,
+  [brand(TOOL_UPLOAD_FILE_SHORT_NAME)]: {} as Tool,
+};
 
 async function seedSkill(organizationId: string) {
   return await SkillModel.createWithFiles({
@@ -409,55 +436,72 @@ describe("buildAgentSystemPrompt", () => {
     expect(withoutCatalog).not.toContain("<available_skills>");
   });
 
-  test("adds the sandbox fallback instruction only when the sandbox is usable", async ({
+  test("adds file-handling guidance only when the agent has file tools", async ({
     makeAgent,
     makeUser,
     makeMember,
-    makeCustomRole,
-    seedAndAssignArchestraTools,
   }) => {
-    const config = (await import("@/config")).default;
-    const originalEnabled = config.skillsSandbox.enabled;
-    (config.skillsSandbox as { enabled: boolean }).enabled = true;
+    const agent = await makeAgent({
+      systemPrompt: "Base.",
+      toolExposureMode: "full",
+    });
+    const user = await makeUser();
+    await makeMember(user.id, agent.organizationId);
+    const common = {
+      agent,
+      organizationId: agent.organizationId,
+      userId: user.id,
+      agentId: agent.id,
+    };
 
-    try {
-      const agent = await makeAgent({
-        systemPrompt: "Base.",
-        toolExposureMode: "full",
-      });
-      const user = await makeUser();
-      const role = await makeCustomRole(agent.organizationId, {
-        permission: { sandbox: ["execute"] },
-      });
-      await makeMember(user.id, agent.organizationId, { role: role.role });
-      await seedAndAssignArchestraTools(agent.id);
+    const withFiles = await buildAgentSystemPrompt({
+      ...common,
+      mcpTools: withFileTools,
+    });
+    // sandbox surface
+    expect(withFiles).toContain("code execution environment");
+    expect(withFiles).toContain(SKILL_SANDBOX_ATTACHMENTS_DIR);
+    // persistent-files surface + the "find the file the user referred to" path
+    expect(withFiles).toContain("persistent files");
+    expect(withFiles).toContain("Files panel");
+    expect(withFiles).toContain(searchFilesToolName);
+    expect(withFiles).toContain("did not attach this turn");
 
-      const withSandbox = await buildAgentSystemPrompt({
-        agent,
-        mcpTools: {},
-        organizationId: agent.organizationId,
-        userId: user.id,
-        agentId: agent.id,
-      });
-      expect(withSandbox).toContain("code execution environment");
-      // attachment staging guidance rides on the same sandbox-available gate
-      expect(withSandbox).toContain(SKILL_SANDBOX_ATTACHMENTS_DIR);
+    // an agent with no file tools gets no file-handling guidance at all
+    const withoutFiles = await buildAgentSystemPrompt({
+      ...common,
+      mcpTools: someTool,
+    });
+    expect(withoutFiles).not.toContain("code execution environment");
+    expect(withoutFiles).not.toContain(SKILL_SANDBOX_ATTACHMENTS_DIR);
+    expect(withoutFiles).not.toContain("persistent files");
+  });
 
-      // the same agent gets no instruction once the sandbox is disabled on the
-      // deployment, even with the tools assigned and the permission granted
-      (config.skillsSandbox as { enabled: boolean }).enabled = false;
-      const withoutSandbox = await buildAgentSystemPrompt({
-        agent,
-        mcpTools: {},
-        organizationId: agent.organizationId,
-        userId: user.id,
-        agentId: agent.id,
-      });
-      expect(withoutSandbox).not.toContain("code execution environment");
-      expect(withoutSandbox).not.toContain(SKILL_SANDBOX_ATTACHMENTS_DIR);
-    } finally {
-      (config.skillsSandbox as { enabled: boolean }).enabled = originalEnabled;
-    }
+  test("words file guidance to the tools present: sandbox-only omits persistent-file discovery", async ({
+    makeAgent,
+    makeUser,
+    makeMember,
+  }) => {
+    const agent = await makeAgent({
+      systemPrompt: "Base.",
+      toolExposureMode: "full",
+    });
+    const user = await makeUser();
+    await makeMember(user.id, agent.organizationId);
+
+    const prompt = await buildAgentSystemPrompt({
+      agent,
+      mcpTools: withSandboxOnly,
+      organizationId: agent.organizationId,
+      userId: user.id,
+      agentId: agent.id,
+    });
+
+    // sandbox guidance is present, but the persistent-file search/discovery
+    // paragraph is not — those tools aren't available to this agent.
+    expect(prompt).toContain("code execution environment");
+    expect(prompt).not.toContain(searchFilesToolName);
+    expect(prompt).not.toContain("did not attach this turn");
   });
 
   test("adds the tool-result instruction only when tools are present", async ({
@@ -520,6 +564,52 @@ describe("buildAgentSystemPrompt", () => {
       agentId: fullAgent.id,
     });
     expect(fullPrompt).not.toContain("must be discovered");
+  });
+
+  // The app tools are hidden from tools/list in search_and_run_only mode, so
+  // the tool-loading section names scaffold_app verbatim (run_tool only
+  // accepts names the model has seen) — unconditionally, with no dispatch-gate
+  // mirroring: a non-dispatchable name is refused by run_tool with a clear
+  // error at call time.
+  test("names scaffold_app in the tool-loading instruction regardless of assignment", async ({
+    makeAgent,
+    makeUser,
+    makeMember,
+  }) => {
+    const user = await makeUser();
+    const scaffoldAppName = brand(TOOL_SCAFFOLD_APP_SHORT_NAME);
+
+    const searchAgent = await makeAgent({
+      systemPrompt: "Base.",
+      toolExposureMode: "search_and_run_only",
+    });
+    await makeMember(user.id, searchAgent.organizationId);
+    const common = {
+      mcpTools: {},
+      organizationId: searchAgent.organizationId,
+      userId: user.id,
+    };
+
+    // nothing assigned — the steering still names the build entry point
+    const searchPrompt = await buildAgentSystemPrompt({
+      ...common,
+      agent: searchAgent,
+      agentId: searchAgent.id,
+    });
+    expect(searchPrompt).toContain(scaffoldAppName);
+
+    // full mode has no tool-loading section, so no app steering either
+    const fullAgent = await makeAgent({
+      systemPrompt: "Base.",
+      toolExposureMode: "full",
+      organizationId: searchAgent.organizationId,
+    });
+    const fullPrompt = await buildAgentSystemPrompt({
+      ...common,
+      agent: fullAgent,
+      agentId: fullAgent.id,
+    });
+    expect(fullPrompt).not.toContain(scaffoldAppName);
   });
 
   test("appends the hook session context last", async ({

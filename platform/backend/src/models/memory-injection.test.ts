@@ -19,6 +19,8 @@ function makeMemory(overrides: {
     teamId: null,
     content: overrides.content,
     createdBy: "user-1",
+    writtenByAgentId: null,
+    sourceKind: "manual",
     taintedAtWrite: false,
     createdAt: overrides.createdAt,
     updatedAt: overrides.createdAt,

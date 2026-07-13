@@ -5,9 +5,10 @@ import {
   VIRTUAL_KEY_HEADER,
 } from "@archestra/shared";
 import type { ConnectionSetupClientId } from "@/types";
-import type {
-  SetupScriptContext,
-  SetupScriptProxySection,
+import {
+  claudeCodeOAuthNextStep,
+  type SetupScriptContext,
+  type SetupScriptProxySection,
 } from "./connection-setup-script";
 
 /**
@@ -26,8 +27,13 @@ import type {
  * - ends with next steps + revocation guidance.
  *
  * Targets Windows PowerShell 5.1 (the OS default) as well as PowerShell 7+: no
- * `-AsHashtable`, ternary, or null-coalescing; native command failures are not
- * promoted to terminating errors so remove-then-add stays idempotent.
+ * `-AsHashtable`, ternary, or null-coalescing. A native command's non-zero exit
+ * is not promoted to a terminating error ($PSNativeCommandUseErrorActionPreference),
+ * but that setting does not cover stderr: under $ErrorActionPreference='Stop'
+ * Windows PowerShell 5.1 turns any native-command stderr line into a terminating
+ * error that 2>$null does not suppress, so the idempotent MCP remove-then-add —
+ * whose remove writes "No MCP server named …" to stderr when the server is not
+ * yet registered — wraps the remove in try/catch to stay idempotent.
  */
 export function renderWindowsSetupScript(ctx: SetupScriptContext): string {
   const sections: string[] = [header(ctx)];
@@ -76,8 +82,11 @@ function psq(value: string): string {
 /**
  * Color setup + logging helpers. Colors are emitted only when NO_COLOR is
  * unset. `Say` marks section headers, `Ok` a success, `Warn`/`Err` advisory
- * and failure lines. Native command failures are demoted so an idempotent
- * remove-then-add never aborts the run.
+ * and failure lines. A native command's non-zero exit is demoted from a
+ * terminating error ($PSNativeCommandUseErrorActionPreference = $false); its
+ * stderr — which $ErrorActionPreference='Stop' still promotes to a terminating
+ * error on Windows PowerShell 5.1, past 2>$null — is instead swallowed per-call
+ * (try/catch around the idempotent MCP remove) so a re-run never aborts.
  */
 const SCRIPT_HELPERS = `$ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -199,9 +208,7 @@ function nextStepsFor(ctx: SetupScriptContext): string[] {
   switch (ctx.clientId) {
     case "claude-code":
       if (ctx.mcp) {
-        steps.push(
-          `Run \`claude\` and use /mcp to finish the OAuth flow for "${ctx.mcp.serverName}".`,
-        );
+        steps.push(claudeCodeOAuthNextStep(ctx.mcp.serverName));
       }
       if (ctx.proxy?.provider === "bedrock" && ctx.proxy.virtualKey) {
         steps.push(
@@ -330,7 +337,7 @@ function claudeCodeSections(ctx: SetupScriptContext): string[] {
 
   if (ctx.mcp) {
     sections.push(`Say ${psq(`Registering MCP gateway "${ctx.mcp.serverName}" (OAuth)`)}
-claude mcp remove ${psq(ctx.mcp.serverName)} 2>$null | Out-Null
+try { claude mcp remove ${psq(ctx.mcp.serverName)} 2>$null | Out-Null } catch { }
 claude mcp add --transport http ${psq(ctx.mcp.serverName)} ${psq(ctx.mcp.url)}`);
   }
 
@@ -357,6 +364,20 @@ if ($LASTEXITCODE -ne 0) { Warn ${psq(`Could not install the skills automaticall
 const CLAUDE_SETTINGS_PATH =
   "(Join-Path $env:USERPROFILE '.claude\\settings.json')";
 
+/**
+ * Custom headers Claude Code sends on every proxied request (Anthropic and
+ * Bedrock alike — ANTHROPIC_CUSTOM_HEADERS applies to both), one "Name: Value"
+ * per line: X-Archestra-Agent-Id (Claude Code attribution, always) and the
+ * X-Archestra-Virtual-Key passthrough header (user attribution, when present).
+ */
+function claudeCustomHeaderLines(proxy: SetupScriptProxySection): string[] {
+  const headerLines = [`${EXTERNAL_AGENT_ID_HEADER}: ${CLAUDE_CODE_CLIENT_ID}`];
+  if (proxy.passthroughVirtualKey) {
+    headerLines.push(`${VIRTUAL_KEY_HEADER}: ${proxy.passthroughVirtualKey}`);
+  }
+  return headerLines;
+}
+
 function claudeAnthropicProxySection(proxy: SetupScriptProxySection): string {
   const values: Record<string, string> = {
     ANTHROPIC_BASE_URL: proxy.url,
@@ -365,13 +386,8 @@ function claudeAnthropicProxySection(proxy: SetupScriptProxySection): string {
     values.ANTHROPIC_AUTH_TOKEN = proxy.virtualKey;
   }
   // Append our custom headers after the base-URL merge, preserving any the user
-  // already set: X-Archestra-Agent-Id (Claude Code attribution, always) and the
-  // X-Archestra-Virtual-Key passthrough header (user attribution, when present).
-  const headerLines = [`${EXTERNAL_AGENT_ID_HEADER}: ${CLAUDE_CODE_CLIENT_ID}`];
-  if (proxy.passthroughVirtualKey) {
-    headerLines.push(`${VIRTUAL_KEY_HEADER}: ${proxy.passthroughVirtualKey}`);
-  }
-  const headerAppend = `\n${claudeCustomHeaderAppendSnippet(headerLines)}`;
+  // already set.
+  const headerAppend = `\n${claudeCustomHeaderAppendSnippet(claudeCustomHeaderLines(proxy))}`;
   const passthroughNote = proxy.virtualKey
     ? ""
     : `
@@ -428,6 +444,7 @@ ${mergeJsonFileSnippet({
     ANTHROPIC_BEDROCK_BASE_URL: proxy.url,
   },
 })}
+${claudeCustomHeaderAppendSnippet(claudeCustomHeaderLines(proxy))}
 Write-Host 'Update AWS_REGION in the settings.json env block if you use a different region.'
 ${
   proxy.virtualKey
@@ -452,7 +469,7 @@ function codexSections(ctx: SetupScriptContext): string[] {
 
   if (ctx.mcp) {
     sections.push(`Say ${psq(`Registering MCP gateway "${ctx.mcp.serverName}" (OAuth)`)}
-codex mcp remove ${psq(ctx.mcp.serverName)} 2>$null | Out-Null
+try { codex mcp remove ${psq(ctx.mcp.serverName)} 2>$null | Out-Null } catch { }
 codex mcp add ${psq(ctx.mcp.serverName)} --url ${psq(ctx.mcp.url)}`);
   }
 
@@ -517,7 +534,7 @@ function copilotSections(ctx: SetupScriptContext): string[] {
 
   if (ctx.mcp) {
     sections.push(`Say ${psq(`Registering MCP gateway "${ctx.mcp.serverName}" (OAuth)`)}
-copilot mcp remove ${psq(ctx.mcp.serverName)} 2>$null | Out-Null
+try { copilot mcp remove ${psq(ctx.mcp.serverName)} 2>$null | Out-Null } catch { }
 copilot mcp add --transport http ${psq(ctx.mcp.serverName)} ${psq(ctx.mcp.url)}
 copilot mcp get ${psq(ctx.mcp.serverName)}`);
   }

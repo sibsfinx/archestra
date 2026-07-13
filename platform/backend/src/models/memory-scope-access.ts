@@ -62,7 +62,9 @@ export async function loadAgentMemoryConfig(
       sharedMemoryWriteEnabled: schema.agentsTable.sharedMemoryWriteEnabled,
     })
     .from(schema.agentsTable)
-    .where(and(eq(schema.agentsTable.id, agentId), notDeleted(schema.agentsTable)))
+    .where(
+      and(eq(schema.agentsTable.id, agentId), notDeleted(schema.agentsTable)),
+    )
     .limit(1);
 
   return agent ?? null;
@@ -149,10 +151,7 @@ export function buildAgentTargetedSharedReadCondition(params: {
   const allowed = allowedVisibilitiesForLevel(params.accessLevel);
   const sharedConditions: SQL[] = [];
 
-  if (
-    params.memoryTargetMode === "org" &&
-    allowed.includes("org")
-  ) {
+  if (params.memoryTargetMode === "org" && allowed.includes("org")) {
     sharedConditions.push(eq(schema.memoriesTable.visibility, "org"));
   }
 
@@ -162,12 +161,13 @@ export function buildAgentTargetedSharedReadCondition(params: {
       params.userTeamIds,
     );
     if (readableTeamIds.length > 0) {
-      sharedConditions.push(
-        and(
-          eq(schema.memoriesTable.visibility, "team"),
-          inArray(schema.memoriesTable.teamId, readableTeamIds),
-        ),
+      const teamCondition = and(
+        eq(schema.memoriesTable.visibility, "team"),
+        inArray(schema.memoriesTable.teamId, readableTeamIds),
       );
+      if (teamCondition) {
+        sharedConditions.push(teamCondition);
+      }
     }
   }
 

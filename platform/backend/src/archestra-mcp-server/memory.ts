@@ -1,14 +1,14 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { type Permission, TOOL_MEMORY_SHORT_NAME } from "@archestra/shared";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { and, count, desc, eq, ilike, ne } from "drizzle-orm";
 import { z } from "zod";
-import config from "@/config";
-import db, { schema, type Transaction } from "@/database";
-import logger from "@/logging";
 import {
   getMemoryPermissionChecker,
   requireMemoryModifyPermission,
 } from "@/auth/memory-permissions";
+import config from "@/config";
+import db, { schema, type Transaction } from "@/database";
+import logger from "@/logging";
 import { MemoryModel, TeamModel } from "@/models";
 import AgentTeamModel from "@/models/agent-team";
 import {
@@ -239,7 +239,9 @@ async function viewMemories(
   if (!readScope?.scopeCondition) {
     return structuredSuccessResult(
       { memories: [] },
-      args.id ? "No matching memory found." : JSON.stringify({ memories: [] }, null, 2),
+      args.id
+        ? "No matching memory found."
+        : JSON.stringify({ memories: [] }, null, 2),
     );
   }
 

@@ -5,7 +5,6 @@ import {
 } from "drizzle-zod";
 import { z } from "zod";
 import { schema } from "@/database";
-import { MemoryVisibilitySchema } from "./memory";
 
 export const MemoryAccessLevelSchema = z.enum([
   "personal",

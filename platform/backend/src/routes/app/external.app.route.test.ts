@@ -1,31 +1,14 @@
 import { ADMIN_ROLE_NAME } from "@archestra/shared";
-import config from "@/config";
 import McpServerUserModel from "@/models/mcp-server-user";
 import type { FastifyInstanceWithZod } from "@/server";
 import { createFastifyInstance } from "@/server";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "@/test";
+import { afterEach, beforeEach, describe, expect, test } from "@/test";
 import type { User } from "@/types";
 
 describe("GET /api/apps/external/:catalogId", () => {
   let app: FastifyInstanceWithZod;
   let organizationId: string;
   let user: User;
-
-  const appsEnabled = config.apps.enabled;
-  beforeAll(() => {
-    (config.apps as { enabled: boolean }).enabled = true;
-  });
-  afterAll(() => {
-    (config.apps as { enabled: boolean }).enabled = appsEnabled;
-  });
 
   beforeEach(async ({ makeOrganization, makeUser, makeMember }) => {
     const organization = await makeOrganization();
@@ -94,6 +77,7 @@ describe("GET /api/apps/external/:catalogId", () => {
         resourceUri: "ui://gt/app.html",
         toolName: "get-time",
         name: "Get Time / get-time",
+        requiresInput: false,
       },
     ]);
   });
@@ -111,9 +95,16 @@ describe("GET /api/apps/external/:catalogId", () => {
       scope: "org",
     });
     await makeMcpServer({ catalogId: catalog.id, scope: "org" });
+    // show_board has a required input, so its resource is flagged for the run
+    // page's open-in-chat handoff instead of a bare render.
     await makeTool({
       catalogId: catalog.id,
       name: "show_board",
+      parameters: {
+        type: "object",
+        properties: { boardId: { type: "string" } },
+        required: ["boardId"],
+      },
       meta: { _meta: { ui: { resourceUri: "ui://pm/board.html" } } },
     });
     await makeTool({
@@ -134,11 +125,13 @@ describe("GET /api/apps/external/:catalogId", () => {
         resourceUri: "ui://pm/backlog.html",
         toolName: "show_backlog",
         name: "Archestra PM / show_backlog",
+        requiresInput: false,
       },
       {
         resourceUri: "ui://pm/board.html",
         toolName: "show_board",
         name: "Archestra PM / show_board",
+        requiresInput: true,
       },
     ]);
     // Default resource is the first (lowest-named) tool.

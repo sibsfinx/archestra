@@ -223,6 +223,52 @@ describe("transformFormToApiData", () => {
     });
   });
 
+  it("parses the additional scopes field into an array", () => {
+    const values: McpCatalogFormValues = {
+      name: "Additional Scopes OAuth MCP",
+      description: "",
+      icon: null,
+      serverType: "remote",
+      serverUrl: "https://mcp.example.com",
+      authMethod: "oauth",
+      includeBearerPrefix: true,
+      authHeaderName: "",
+      additionalHeaders: [],
+      oauthConfig: {
+        client_id: "client-id",
+        client_secret: "client-secret",
+        audience: "",
+        redirect_uris: "https://app.example.com/oauth-callback",
+        scopes: "read",
+        additional_scopes: "offline_access, custom:scope",
+        supports_resource_metadata: false,
+        grantType: "authorization_code",
+        oauthServerUrl: "",
+        authServerUrl: "",
+        authorizationEndpoint: "",
+        wellKnownUrl: "",
+        resourceMetadataUrl: "",
+        tokenEndpoint: "",
+      },
+      enterpriseManagedConfig: null,
+      localConfig: undefined,
+      deploymentSpecYaml: "",
+      originalDeploymentSpecYaml: "",
+      oauthClientSecretVaultPath: "",
+      oauthClientSecretVaultKey: "",
+      localConfigVaultPath: "",
+      localConfigVaultKey: "",
+      labels: [],
+      scope: "personal",
+      teams: [],
+    };
+
+    expect(transformFormToApiData(values).oauthConfig).toMatchObject({
+      scopes: ["read"],
+      additional_scopes: ["offline_access", "custom:scope"],
+    });
+  });
+
   it("treats comma-only scopes input as blank (persists empty scopes with read/write fallback)", () => {
     const values: McpCatalogFormValues = {
       name: "Comma Scope OAuth MCP",
@@ -349,7 +395,7 @@ describe("transformFormToApiData", () => {
       localConfigVaultKey: "",
       labels: [],
       scope: "team",
-      teams: ["team-1"],
+      teams: [{ id: "team-1", level: "use" }],
     };
 
     const result = transformFormToApiData(values);
@@ -1011,5 +1057,45 @@ describe("buildCloneFormValues", () => {
     } as never);
 
     expect(values.oauthConfig?.client_secret).toBe("keep-me");
+  });
+});
+
+describe("team access levels", () => {
+  it("hydrates each team's stored level into the form", () => {
+    const values = transformCatalogItemToFormValues({
+      name: "srv",
+      serverType: "remote",
+      serverUrl: "https://mcp.example.com",
+      scope: "team",
+      teams: [
+        { id: "t1", name: "platform", level: "write" },
+        { id: "t2", name: "data", level: "use" },
+      ],
+      labels: [],
+    } as never);
+
+    expect(values.teams).toEqual([
+      { id: "t1", level: "write" },
+      { id: "t2", level: "use" },
+    ]);
+  });
+
+  it("sends each team's level to the API", () => {
+    const data = transformFormToApiData({
+      name: "srv",
+      serverType: "remote",
+      serverUrl: "https://mcp.example.com",
+      scope: "team",
+      teams: [
+        { id: "t1", level: "write" },
+        { id: "t2", level: "use" },
+      ],
+      labels: [],
+    } as never);
+
+    expect(data.teams).toEqual([
+      { id: "t1", level: "write" },
+      { id: "t2", level: "use" },
+    ]);
   });
 });

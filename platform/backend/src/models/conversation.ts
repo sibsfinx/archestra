@@ -14,6 +14,7 @@ import type {
   Conversation,
   ConversationOrigin,
   InsertConversation,
+  MessageFeedback,
   ToolExposureMode,
   UpdateConversation,
 } from "@/types";
@@ -177,6 +178,7 @@ class ConversationModel {
         .orderBy(
           desc(schema.conversationsTable.lastMessageAt),
           schema.messagesTable.createdAt,
+          schema.messagesTable.id,
         )
         .limit(
           ConversationModel.SEARCH_RESULT_LIMIT *
@@ -330,7 +332,7 @@ class ConversationModel {
           eq(schema.conversationsTable.organizationId, organizationId),
         ),
       )
-      .orderBy(schema.messagesTable.createdAt);
+      .orderBy(schema.messagesTable.createdAt, schema.messagesTable.id);
 
     if (rows.length === 0) {
       return null;
@@ -526,7 +528,7 @@ class ConversationModel {
           eq(schema.conversationsTable.organizationId, params.organizationId),
         ),
       )
-      .orderBy(schema.messagesTable.createdAt);
+      .orderBy(schema.messagesTable.createdAt, schema.messagesTable.id);
 
     if (rows.length === 0) {
       return null;
@@ -629,7 +631,14 @@ class ConversationModel {
   }): Promise<boolean> {
     const [updated] = await db
       .update(schema.conversationsTable)
-      .set({ lastReadAt: new Date() })
+      // GREATEST: the newest message visible at read time is covered even
+      // when it landed in the same millisecond (or marginally ahead of the
+      // reader's clock) — unread is a strict lastMessageAt > lastReadAt
+      // comparison, so a read must never leave lastReadAt behind
+      // lastMessageAt.
+      .set({
+        lastReadAt: sql`GREATEST(${new Date()}::timestamp, ${schema.conversationsTable.lastMessageAt})`,
+      })
       .where(
         and(
           eq(schema.conversationsTable.id, params.id),
@@ -748,6 +757,7 @@ function shouldReturnPersistedMessageRow(message: {
 function addMessagePersistenceMetadata(message: {
   id: string;
   content: unknown;
+  feedback: MessageFeedback | null;
   createdAt: Date;
 }) {
   const content =
@@ -767,6 +777,9 @@ function addMessagePersistenceMetadata(message: {
     metadata: {
       ...metadata,
       createdAt: message.createdAt.toISOString(),
+      // The column is authoritative: content JSON may carry a stale copied
+      // value (e.g. a forked conversation), so always override it here.
+      feedback: message.feedback ?? undefined,
     },
   };
 }

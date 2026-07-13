@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   Link2,
+  MessageSquare,
   Pencil,
   Plus,
   Trash2,
@@ -47,6 +48,7 @@ import { CreateConnectorDialog } from "./_parts/create-connector-dialog";
 import { CreateKnowledgeBaseDialog } from "./_parts/create-knowledge-base-dialog";
 import { EditConnectorDialog } from "./_parts/edit-connector-dialog";
 import { EditKnowledgeBaseDialog } from "./_parts/edit-knowledge-base-dialog";
+import { useChatWithKnowledgeBase } from "./_parts/use-chat-with-knowledge-base";
 
 type KnowledgeBaseItem =
   archestraApiTypes.GetKnowledgeBasesResponses["200"]["data"][number];
@@ -93,6 +95,7 @@ function KnowledgeBasesList() {
     null,
   );
   const [addConnectorKbId, setAddConnectorKbId] = useState<string | null>(null);
+  const { startChat, isCreating: isChatCreating } = useChatWithKnowledgeBase();
 
   const items = knowledgeBases?.data ?? [];
   const pagination = knowledgeBases?.pagination;
@@ -117,6 +120,7 @@ function KnowledgeBasesList() {
             e.stopPropagation();
             row.toggleExpanded();
           }}
+          aria-label="Toggle row"
         >
           {row.getIsExpanded() ? (
             <ChevronDown className="h-4 w-4" />
@@ -159,7 +163,17 @@ function KnowledgeBasesList() {
       header: "Actions",
       cell: ({ row }) => {
         const kb = row.original;
+        const hasDocs = kb.totalDocsIndexed > 0;
         const actions: TableRowAction[] = [
+          {
+            icon: <MessageSquare className="h-4 w-4" />,
+            label: "Talk to Knowledge Base",
+            onClick: () => startChat(kb),
+            disabled: isChatCreating || !hasDocs,
+            disabledTooltip: hasDocs
+              ? "Starting chat..."
+              : "Add a connector and index documents to chat with this knowledge base",
+          },
           {
             icon: <Plus className="h-4 w-4" />,
             label: "Add connector",
@@ -504,6 +518,7 @@ function AddConnectorDialog({
                   setStep("choose");
                   setSelectedIds(new Set());
                 }}
+                aria-label="Go back"
               >
                 <ArrowLeft className="h-4 w-4" />
               </Button>

@@ -40,6 +40,7 @@ export const UpdateMemorySchema = createUpdateSchema(schema.memoriesTable, {
   tier: MemoryTierSchema.optional(),
   visibility: MemoryVisibilitySchema.optional(),
   content: z.string().optional(),
+  sourceKind: MemorySourceKindSchema.optional(),
   taintedAtWrite: z.boolean().optional(),
 }).omit({
   id: true,

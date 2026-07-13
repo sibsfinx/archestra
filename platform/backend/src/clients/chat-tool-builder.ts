@@ -4,6 +4,7 @@
 // execution). Must not import chat-mcp-client.ts (cycle).
 import { randomUUID } from "node:crypto";
 import {
+  extractMcpToolError,
   isAppRenderingArchestraToolShortName,
   isBrowserMcpTool,
   parseFullToolName,
@@ -27,6 +28,7 @@ import {
   archestraMcpBranding,
   executeArchestraTool,
 } from "@/archestra-mcp-server";
+import { resolveDynamicTool } from "@/archestra-mcp-server/dynamic-tools";
 import { resolveRunToolTarget } from "@/archestra-mcp-server/run-tool-target";
 import type { ChatMcpElicitationBridge } from "@/clients/chat-mcp-elicitation";
 import mcpClient, { type TokenAuthContext } from "@/clients/mcp-client";
@@ -46,16 +48,8 @@ import {
   type SpanTeamInfo,
   startActiveMcpSpan,
 } from "@/observability/tracing";
-import type {
-  DiscoveredToolPolicy,
-  GlobalToolPolicy,
-  UnsafeContextBoundary,
-} from "@/types";
-import {
-  agentOwner,
-  defaultDiscoveredToolPolicy,
-  UNSAFE_CONTEXT_BOUNDARY_REASON,
-} from "@/types";
+import type { Tool as CatalogTool, UnsafeContextBoundary } from "@/types";
+import { agentOwner, UNSAFE_CONTEXT_BOUNDARY_REASON } from "@/types";
 
 /** Gateway token selected for the current call (see selectMCPGatewayToken). */
 export interface McpGatewayToken {
@@ -105,8 +99,6 @@ export interface ChatToolContext {
    */
   subagentToolStream?: SubagentToolStreamBridge;
   mcpGwToken: McpGatewayToken;
-  globalToolPolicy: GlobalToolPolicy;
-  discoveredToolPolicy: DiscoveredToolPolicy;
   considerContextUntrusted: boolean;
   /**
    * Per-run guard against the model re-issuing the identical tool call forever.
@@ -127,6 +119,16 @@ export function buildMcpGatewayTool(params: {
 }): Tool {
   const { mcpTool, ctx } = params;
   const normalizedSchema = normalizeJsonSchema(mcpTool.inputSchema);
+  // Only UI-providing tools are advertised top-level unassigned, so only they
+  // need the (DB-heavy) dynamic resolution at call time. The gateway emits the
+  // same `_meta.ui.resourceUri` it lists top-level with, so this build-time flag
+  // matches what resolveDynamicTool would find — computed once here to keep the
+  // resolution off the hot path for ordinary assigned tools.
+  const isUiProvidingTool = metaProvidesUiResource(
+    mcpTool._meta as
+      | { ui?: { resourceUri?: unknown }; "ui/resourceUri"?: unknown }
+      | undefined,
+  );
 
   return {
     description: mcpTool.description || `Tool: ${mcpTool.name}`,
@@ -194,7 +196,6 @@ export function buildMcpGatewayTool(params: {
                 organizationId: ctx.organizationId,
                 userId: ctx.userId,
                 considerContextUntrusted: ctx.considerContextUntrusted,
-                globalToolPolicy: ctx.globalToolPolicy,
                 policyContext: {
                   externalAgentId: getChatExternalAgentId(),
                 },
@@ -216,6 +217,9 @@ export function buildMcpGatewayTool(params: {
                 abortSignal: ctx.abortSignal,
                 elicitation: ctx.elicitation,
                 contextIsTrusted: toolExecutionContext.contextIsTrusted,
+                // `run_tool` can dispatch a delegation tool, so this context
+                // needs the caller's ancestors for the executor's cycle check.
+                delegationChain: ctx.delegationChain,
                 approvalRequiredPoliciesHandled: true,
                 tokenAuth: buildTokenAuthContext({
                   mcpGwToken: ctx.mcpGwToken,
@@ -259,6 +263,13 @@ export function buildMcpGatewayTool(params: {
               toolName: mcpTool.name,
               toolArguments,
               agentId: ctx.agentId,
+              userId: ctx.userId,
+              organizationId: ctx.organizationId,
+              tokenAuth: buildTokenAuthContext({
+                mcpGwToken: ctx.mcpGwToken,
+                organizationId: ctx.organizationId,
+                userId: ctx.userId,
+              }),
             });
           } else {
             // Execute non-Archestra tools via shared helper with browser sync
@@ -271,10 +282,10 @@ export function buildMcpGatewayTool(params: {
               organizationId: ctx.organizationId,
               isolationKey: ctx.scopeKey,
               mcpGwToken: ctx.mcpGwToken,
-              globalToolPolicy: ctx.globalToolPolicy,
               considerContextUntrusted: ctx.considerContextUntrusted,
               abortSignal: ctx.abortSignal,
               elicitation: ctx.elicitation,
+              isUiProvidingTool,
             });
           }
 
@@ -367,7 +378,6 @@ export function buildAgentDelegationTool(params: {
             organizationId: ctx.organizationId,
             userId: ctx.userId,
             considerContextUntrusted: ctx.considerContextUntrusted,
-            globalToolPolicy: ctx.globalToolPolicy,
             policyContext: {
               externalAgentId: getChatExternalAgentId(),
             },
@@ -479,7 +489,8 @@ function extractModelOutputImages(
  * for the common case; when run_tool dispatched to an interactive tool, returns
  * the rich shape (with `_meta.ui.resourceUri` from the target tool's definition)
  * so the frontend renders the MCP App — mirroring how `executeMcpTool` enriches
- * directly-called tools.
+ * directly-called tools. The target's UI resource is resolved from its
+ * assignment, or (for an "all tools" agent) from the user's dynamic-access set.
  * @public — exported for testability
  */
 export async function buildArchestraToolOutput(params: {
@@ -487,6 +498,21 @@ export async function buildArchestraToolOutput(params: {
   toolName: string;
   toolArguments: unknown;
   agentId: string;
+  /**
+   * Caller identity used to resolve the dispatched target tool's UI resource
+   * when the tool is reachable only through dynamic access ("all tools" mode)
+   * and has no `agent_tools` assignment. Omit for callers that never dispatch
+   * unassigned tools; the resolution then stays assignment-scoped.
+   */
+  userId?: string;
+  organizationId?: string;
+  /**
+   * Caller auth used to resolve the concrete install (own→team→org) backing a
+   * run_tool-dispatched external MCP App's UI resource, so its callbacks bind to
+   * that install. Omit when the caller can't reach external UI tools; the app
+   * then renders without a server binding (unchanged legacy behaviour).
+   */
+  tokenAuth?: TokenAuthContext;
 }): Promise<
   | string
   | {
@@ -496,7 +522,15 @@ export async function buildArchestraToolOutput(params: {
       rawContent?: ContentBlock[];
     }
 > {
-  const { response, toolName, toolArguments, agentId } = params;
+  const {
+    response,
+    toolName,
+    toolArguments,
+    agentId,
+    userId,
+    organizationId,
+    tokenAuth,
+  } = params;
   // Never stringify an image block into the text summary — its base64 would
   // bloat context and evade the history image-stripper. Images ride rawContent
   // and reach the model as bounded media parts via toModelOutput instead.
@@ -550,7 +584,21 @@ export async function buildArchestraToolOutput(params: {
 
   let resourceUri: string | undefined;
   try {
-    const toolDef = await ToolModel.findByNameForAgent(targetToolName, agentId);
+    // Assigned tools resolve directly. A tool the agent reaches only through
+    // dynamic access ("all tools" mode) has no `agent_tools` row, so fall back
+    // to the same user-scoped resolution run_tool used to dispatch it —
+    // otherwise its MCP App UI resource is dropped and the app renders as a
+    // plain tool-call card instead of an iframe.
+    const toolDef =
+      (await ToolModel.findByNameForAgent(targetToolName, agentId)) ??
+      (userId && organizationId
+        ? await resolveDynamicTool({
+            toolName: targetToolName,
+            agentId,
+            userId,
+            organizationId,
+          })
+        : null);
     resourceUri = (
       toolDef?.meta as { _meta?: { ui?: McpUiToolMeta } } | undefined
     )?._meta?.ui?.resourceUri;
@@ -560,13 +608,52 @@ export async function buildArchestraToolOutput(params: {
       "Failed to fetch dispatched tool definition meta",
     );
   }
+  // Drop the resource when its upstream server can't actually serve it (e.g.
+  // -32601), so the dispatch falls through to the plain-result handling below
+  // instead of registering an app that renders nothing. See uiResourceIsReadable.
+  if (
+    resourceUri &&
+    !(await uiResourceIsReadable({ uri: resourceUri, agentId, tokenAuth }))
+  ) {
+    resourceUri = undefined;
+  }
   if (!resourceUri) {
+    // A dispatched third-party tool with no MCP-App UI. If it returned a
+    // structured Archestra error (e.g. the expired-auth re-auth payload),
+    // preserve `_meta`/`structuredContent` so chat renders the same rich card
+    // as a direct call. The bare-text fallback below strips
+    // `_meta.archestraError`/`structuredContent.archestraError`, degrading the
+    // card to a text-parsed one (which loses e.g. the credential scope). Mirrors
+    // the direct path (executeMcpTool), which keeps these fields on error.
+    if (response.isError && extractMcpToolError(response)) {
+      return {
+        content: text,
+        _meta: response._meta as Record<string, unknown> | undefined,
+        structuredContent: response.structuredContent as
+          | Record<string, unknown>
+          | undefined,
+        rawContent: response.content as ContentBlock[],
+      };
+    }
     return text;
   }
 
+  // Bind the app's callbacks to the concrete install so its SDK `callServerTool`
+  // reaches the originating server (POST /api/mcp/server/:id) rather than the
+  // agent gateway (which rejects the bare tool name). This run_tool path is how
+  // an all-tools agent opens an external app — the tool is unassigned, so only
+  // the dynamic-access resolution above (and this install lookup) can bind it.
+  // Owned-app backings resolve to null and keep their app-id routing.
+  const mcpServerId = await mcpClient
+    .resolveUiAppInstallIdForCaller(resourceUri, agentId, tokenAuth)
+    .catch(() => null);
+
   return {
     content: text,
-    _meta: { ...response._meta, ui: { resourceUri } },
+    _meta: {
+      ...response._meta,
+      ui: { resourceUri, ...(mcpServerId ? { mcpServerId } : {}) },
+    },
     structuredContent: response.structuredContent as
       | Record<string, unknown>
       | undefined,
@@ -622,8 +709,6 @@ function needsApprovalProps(params: {
           teamIds: [],
           externalAgentId: getChatExternalAgentId(),
         },
-        ctx.globalToolPolicy,
-        ctx.discoveredToolPolicy,
       );
     },
   };
@@ -661,12 +746,7 @@ async function executeWithToolSpan<R>(params: {
   } = params;
 
   if (ctx.blockOnApprovalRequired) {
-    await throwIfApprovalRequired(
-      toolName,
-      args,
-      ctx.globalToolPolicy,
-      ctx.discoveredToolPolicy,
-    );
+    await throwIfApprovalRequired(toolName, args);
   }
 
   logger.info(
@@ -739,10 +819,15 @@ interface ToolExecutionContext {
     McpGatewayToken,
     "tokenId" | "teamId" | "isOrganizationToken"
   > | null;
-  globalToolPolicy: GlobalToolPolicy;
   considerContextUntrusted: boolean;
   abortSignal?: AbortSignal;
   elicitation?: ChatMcpElicitationBridge;
+  /**
+   * Set when the tool's gateway-listed definition carries a `ui://` resource,
+   * i.e. it may be advertised top-level while unassigned. Gates the dynamic
+   * availableTool resolution so ordinary assigned tools skip its DB lookups.
+   */
+  isUiProvidingTool?: boolean;
 }
 
 /**
@@ -774,6 +859,7 @@ async function executeMcpTool(ctx: ToolExecutionContext): Promise<{
     mcpGwToken,
     abortSignal,
     elicitation,
+    isUiProvidingTool,
   } = ctx;
   throwIfAborted(abortSignal);
   const startTime = Date.now();
@@ -813,21 +899,51 @@ async function executeMcpTool(ctx: ToolExecutionContext): Promise<{
     arguments: toolArguments ?? {},
   };
 
+  // An all-tools agent advertises unassigned UI-providing tools (app/external
+  // launch tools) top-level so a model can call one directly — an MCP-App host
+  // renders a UI only from a tool listed at discovery time, never from a
+  // run_tool result. Dispatch accepts an unassigned tool only via a pre-resolved
+  // availableTool, so resolve it exactly as the gateway CallTool handler and
+  // run_tool do (resolveDynamicTool self-gates on the agent's all-tools
+  // setting), gated to the UI-providing subset: only that subset is listed
+  // top-level, so resolving anything else would make a hidden tool name directly
+  // executable. isUiProvidingTool (from the gateway-listed `_meta`) keeps the
+  // DB-heavy resolution off the hot path for ordinary assigned tools, which
+  // never carry a `ui://` resource and would discard the result at the guard
+  // below anyway.
+  let availableTool: CatalogTool | undefined;
+  if (isUiProvidingTool && userId && organizationId) {
+    const dynamicTool = await resolveDynamicTool({
+      toolName,
+      agentId,
+      userId,
+      organizationId,
+    });
+    if (dynamicTool && toolProvidesUiResource(dynamicTool)) {
+      availableTool = dynamicTool;
+    }
+  }
+
+  // Caller auth for install resolution (own→team→org), reused below to verify a
+  // declared UI resource is readable with the exact same scoping the execution used.
+  const tokenAuthContext = mcpGwToken
+    ? {
+        tokenId: mcpGwToken.tokenId,
+        teamId: mcpGwToken.teamId,
+        isOrganizationToken: mcpGwToken.isOrganizationToken,
+        organizationId,
+        userId,
+      }
+    : undefined;
+
   let result: Awaited<ReturnType<typeof mcpClient.executeToolCallForOwner>>;
   try {
     result = await mcpClient.executeToolCallForOwner(
       toolCall,
       agentOwner(agentId),
-      mcpGwToken
-        ? {
-            tokenId: mcpGwToken.tokenId,
-            teamId: mcpGwToken.teamId,
-            isOrganizationToken: mcpGwToken.isOrganizationToken,
-            organizationId,
-            userId,
-          }
-        : undefined,
+      tokenAuthContext,
       {
+        ...(availableTool ? { availableTool } : {}),
         // mcp-client scopes per-conversation sessions by this key; in UI chat it
         // is the conversation id, in headless executions the execution key.
         conversationId: isolationKey,
@@ -883,7 +999,6 @@ async function executeMcpTool(ctx: ToolExecutionContext): Promise<{
         toolName,
         toolOutput: extractedError || result.error || "Tool execution failed",
         agentId,
-        globalToolPolicy: ctx.globalToolPolicy,
         considerContextUntrusted: ctx.considerContextUntrusted,
       })),
       structuredContent: result.structuredContent,
@@ -975,6 +1090,27 @@ async function executeMcpTool(ctx: ToolExecutionContext): Promise<{
     );
   }
 
+  // A tool definition can declare a `ui://` MCP App resource its upstream server
+  // never actually serves (e.g. resources/read → -32601 Method not found).
+  // Keeping it would register an app that renders nothing — an empty pill and an
+  // auto-opened, blank right panel — so drop the declared resource when it can't
+  // be read, letting the tool render as a plain call. An embedded inline resource
+  // (below) is self-contained and re-synthesizes the ui after this check.
+  const declaredUiResourceUri = toolDefinitionMeta?.ui?.resourceUri;
+  if (
+    declaredUiResourceUri &&
+    toolDefinitionMeta?.ui &&
+    !(await uiResourceIsReadable({
+      uri: declaredUiResourceUri,
+      agentId,
+      tokenAuth: tokenAuthContext,
+    }))
+  ) {
+    const { resourceUri: _unreadable, ...uiWithoutResource } =
+      toolDefinitionMeta.ui;
+    toolDefinitionMeta = { ...toolDefinitionMeta, ui: uiWithoutResource };
+  }
+
   // Check for embedded resources (type: "resource" content items with UI resources)
   // MCP servers can return UI resources inline in tool results as an alternative to
   // declaring _meta.ui.resourceUri in tool definitions. Both patterns are standard MCP.
@@ -1024,7 +1160,6 @@ async function executeMcpTool(ctx: ToolExecutionContext): Promise<{
       toolName,
       toolOutput: result.structuredContent ?? textContent,
       agentId,
-      globalToolPolicy: ctx.globalToolPolicy,
       considerContextUntrusted: ctx.considerContextUntrusted,
     })),
     structuredContent: result.structuredContent,
@@ -1049,18 +1184,92 @@ function resolveRunToolTargetName(toolName: string, args: unknown): string {
     : toolName;
 }
 
+// Whether a tool's `_meta` carries an MCP App `ui://` resource — the subset
+// advertised top-level and therefore directly dispatchable. Mirrors
+// `providesUiResource` in the gateway's tools/list builder; kept local to avoid
+// a clients → routes import.
+function metaProvidesUiResource(
+  meta:
+    | { ui?: { resourceUri?: unknown }; "ui/resourceUri"?: unknown }
+    | null
+    | undefined,
+): boolean {
+  const isUiUri = (value: unknown): boolean =>
+    typeof value === "string" && value.startsWith("ui://");
+  return isUiUri(meta?.ui?.resourceUri) || isUiUri(meta?.["ui/resourceUri"]);
+}
+
+/**
+ * Whether an MCP App `ui://` UI resource can actually be read from its upstream
+ * server. A tool may advertise a resource its server never implements
+ * (`resources/read` → -32601 Method not found) or otherwise can't serve;
+ * attaching such a resource to a tool result makes chat register an app that
+ * renders nothing — an empty pill plus an auto-opened, blank right panel. Both
+ * enrichment paths (executeMcpTool and buildArchestraToolOutput) gate the
+ * attachment on this, mirroring the SSE prefetch's own readability gate
+ * (tool-ui-stream). A successful read is cached, so the frontend's later render
+ * reuses it rather than re-reading.
+ */
+async function uiResourceIsReadable(params: {
+  uri: string;
+  agentId: string;
+  tokenAuth?: TokenAuthContext;
+}): Promise<boolean> {
+  try {
+    await mcpClient.readResource(params.uri, params.agentId, params.tokenAuth);
+    return true;
+  } catch (error) {
+    logger.debug(
+      { error, uri: params.uri, agentId: params.agentId },
+      "MCP App UI resource unreadable; rendering as a plain tool call",
+    );
+    return false;
+  }
+}
+
+// The resolved catalog tool nests its MCP `_meta` one level down under `meta`.
+function toolProvidesUiResource(tool: CatalogTool): boolean {
+  const meta = (
+    tool.meta as
+      | {
+          _meta?: {
+            ui?: { resourceUri?: unknown };
+            "ui/resourceUri"?: unknown;
+          };
+        }
+      | null
+      | undefined
+  )?._meta;
+  return metaProvidesUiResource(meta);
+}
+
 async function buildUnsafeContextBoundaryResult(params: {
   resultMeta?: Record<string, unknown>;
   toolCallId: string;
   toolName: string;
   toolOutput: unknown;
   agentId: string;
-  globalToolPolicy: GlobalToolPolicy;
   considerContextUntrusted: boolean;
 }): Promise<{
   _meta?: Record<string, unknown>;
   unsafeContextBoundary?: UnsafeContextBoundary;
 }> {
+  // A platform dispatch error (tool_state, e.g. unknown_tool) never reached an
+  // upstream tool, so its result is platform-authored text with no external
+  // data — never mark the context unsafe for it. Mirrors the trusted-data bulk
+  // re-evaluation, which exempts the same envelopes; without both, a benign
+  // unresolved-tool error poisons the session and blocks the next legit call.
+  if (
+    extractMcpToolError({
+      _meta: params.resultMeta,
+      content: params.toolOutput,
+    })?.type === "tool_state"
+  ) {
+    return params.resultMeta && Object.keys(params.resultMeta).length > 0
+      ? { _meta: params.resultMeta }
+      : {};
+  }
+
   const unsafeContextBoundary =
     await evaluateUnsafeContextBoundaryForToolResult(params);
   const mergedMeta = unsafeContextBoundary
@@ -1083,7 +1292,6 @@ async function evaluateUnsafeContextBoundaryForToolResult(params: {
   toolName: string;
   toolOutput: unknown;
   agentId: string;
-  globalToolPolicy: GlobalToolPolicy;
   considerContextUntrusted: boolean;
 }): Promise<UnsafeContextBoundary | undefined> {
   if (params.considerContextUntrusted) {
@@ -1099,7 +1307,6 @@ async function evaluateUnsafeContextBoundaryForToolResult(params: {
         toolOutput: params.toolOutput,
       },
     ],
-    params.globalToolPolicy,
     {
       teamIds,
       externalAgentId: getChatExternalAgentId(),
@@ -1174,13 +1381,6 @@ function isAbortLikeError(error: unknown): boolean {
 async function throwIfApprovalRequired(
   toolName: string,
   args: unknown,
-  globalToolPolicy: GlobalToolPolicy,
-  // Defaults to the discovered-tool equivalent of globalToolPolicy so callers
-  // that don't distinguish discovered tools keep single-policy behavior; the
-  // chat path passes it explicitly.
-  discoveredToolPolicy: DiscoveredToolPolicy = defaultDiscoveredToolPolicy(
-    globalToolPolicy,
-  ),
 ): Promise<void> {
   const approvalTarget = resolveApprovalPolicyTarget(toolName, args);
   const requiresApproval =
@@ -1191,8 +1391,6 @@ async function throwIfApprovalRequired(
         teamIds: [],
         externalAgentId: getChatExternalAgentId(),
       },
-      globalToolPolicy,
-      discoveredToolPolicy,
     );
   if (requiresApproval) {
     throw new Error(TOOL_INVOCATION_APPROVAL_REQUIRED_AUTONOMOUS_REASON);
@@ -1472,12 +1670,144 @@ function normalizeJsonSchema(schema: unknown): JSONSchema7 {
     return fallbackSchema;
   }
 
+  // Give every subschema an explicit `type`. MCP servers may emit untyped
+  // nodes (e.g. zod `z.unknown()` becomes a bare `{}`), which are valid JSON
+  // Schema but rejected by providers with strict function-call validation —
+  // Gemini/Vertex 400s with "schema didn't specify the schema type field",
+  // and that can surface even behind OpenRouter when it routes a model to a
+  // Google-hosted deployment.
+  const typed = ensureExplicitSchemaTypes(schema);
+
   // Add additionalProperties: false to all object-type schemas recursively.
   // This is required for OpenAI-compatible providers (Ollama, vLLM) to properly
   // emit streaming tool calls instead of outputting tool calls as text content.
   // Without it, models hallucinate extra properties and providers may fail to
   // recognize the output as a tool call in streaming mode.
-  return addAdditionalPropertiesFalse(schema) as JSONSchema7;
+  return addAdditionalPropertiesFalse(typed) as JSONSchema7;
+}
+
+// JSON-schema keywords whose value is a map of named subschemas
+const SUBSCHEMA_MAP_KEYS = [
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+] as const;
+
+// JSON-schema keywords whose value is an array of subschemas
+const SUBSCHEMA_ARRAY_KEYS = [
+  "anyOf",
+  "oneOf",
+  "allOf",
+  "prefixItems",
+] as const;
+
+// JSON-schema keywords whose value is a single subschema
+const SINGLE_SUBSCHEMA_KEYS = [
+  "additionalProperties",
+  "items",
+  "contains",
+  "not",
+] as const;
+
+/**
+ * Recursively ensures every schema node carries an explicit `type` (or is a
+ * `$ref` / an `anyOf`/`oneOf`/`allOf` composite whose branches are typed).
+ * The type is inferred from structural keywords when possible; a completely
+ * bare "accept anything" node (`{}`) becomes an open object — the same
+ * fallback Google's own SDKs and LiteLLM apply for Vertex compatibility.
+ */
+function ensureExplicitSchemaTypes(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  const result = { ...schema };
+
+  for (const key of SUBSCHEMA_MAP_KEYS) {
+    const map = result[key];
+    if (isRecord(map)) {
+      const newMap: Record<string, unknown> = {};
+      for (const [name, sub] of Object.entries(map)) {
+        newMap[name] = isRecord(sub) ? ensureExplicitSchemaTypes(sub) : sub;
+      }
+      result[key] = newMap;
+    }
+  }
+
+  for (const key of SUBSCHEMA_ARRAY_KEYS) {
+    const arr = result[key];
+    if (Array.isArray(arr)) {
+      result[key] = arr.map((sub) =>
+        isRecord(sub) ? ensureExplicitSchemaTypes(sub) : sub,
+      );
+    }
+  }
+
+  for (const key of SINGLE_SUBSCHEMA_KEYS) {
+    const sub = result[key];
+    if (isRecord(sub)) {
+      result[key] = ensureExplicitSchemaTypes(sub);
+    }
+  }
+
+  // `items` may also be the (deprecated) tuple form
+  if (Array.isArray(result.items)) {
+    result.items = result.items.map((sub) =>
+      isRecord(sub) ? ensureExplicitSchemaTypes(sub) : sub,
+    );
+  }
+
+  if (result.type !== undefined || typeof result.$ref === "string") {
+    return result;
+  }
+  // Composite nodes are typed via their branches
+  if (
+    Array.isArray(result.anyOf) ||
+    Array.isArray(result.oneOf) ||
+    Array.isArray(result.allOf)
+  ) {
+    return result;
+  }
+
+  const inferred = inferSchemaType(result);
+  if (inferred) {
+    result.type = inferred;
+    return result;
+  }
+
+  // Bare "any" node: default to an open object. `additionalProperties: true`
+  // is set explicitly so addAdditionalPropertiesFalse doesn't clamp it shut.
+  result.type = "object";
+  result.additionalProperties = true;
+  return result;
+}
+
+/** Infers a JSON-schema `type` from structural keywords, or null for a bare node. */
+function inferSchemaType(node: Record<string, unknown>): string | null {
+  if (
+    isRecord(node.properties) ||
+    isRecord(node.patternProperties) ||
+    Array.isArray(node.required) ||
+    "additionalProperties" in node
+  ) {
+    return "object";
+  }
+  if ("items" in node || "prefixItems" in node || "contains" in node) {
+    return "array";
+  }
+  const literals = Array.isArray(node.enum)
+    ? node.enum
+    : "const" in node
+      ? [node.const]
+      : [];
+  const nonNull = literals.filter((v) => v !== null);
+  if (nonNull.length > 0) {
+    if (nonNull.every((v) => typeof v === "string")) return "string";
+    if (nonNull.every((v) => typeof v === "boolean")) return "boolean";
+    if (nonNull.every((v) => typeof v === "number")) {
+      return nonNull.every((v) => Number.isInteger(v)) ? "integer" : "number";
+    }
+  }
+  return null;
 }
 
 /**

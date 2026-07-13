@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import {
+  ChatErrorCode,
+  providerDisplayNames,
+  type ResourceVisibilityScope,
+} from "@archestra/shared";
 import { A2AManager } from "@/agents/a2a/a2a-manager";
 import type { A2AAttachment } from "@/agents/a2a-executor";
 import { resolveRunToolTarget } from "@/archestra-mcp-server/run-tool-target";
@@ -13,10 +18,13 @@ import {
   ChatOpsConfigModel,
   ChatOpsProcessedMessageModel,
   ChatOpsThreadAgentOverrideModel,
+  LlmProviderApiKeyModel,
   OrganizationModel,
+  TeamModel,
   UserModel,
 } from "@/models";
 import { RouteCategory } from "@/observability/tracing";
+import { ProviderError } from "@/routes/chat/errors";
 import type {
   ChatOpsApprovalDecision,
   ChatOpsConnectionMode,
@@ -24,8 +32,11 @@ import type {
   ChatOpsProvider,
   ChatOpsProviderType,
   IncomingChatMessage,
+  SkippedAttachment,
 } from "@/types";
 import { LlmProviderAuthRequiredError } from "@/utils/llm-provider-auth-error";
+import { resolveConversationLlmSelectionForAgent } from "@/utils/llm-resolution";
+import { stripThinkingBlocks } from "@/utils/strip-thinking-blocks";
 import type { InteractionSource } from "../../../../shared";
 import {
   buildApprovalDecisionSendMessageRequest,
@@ -54,7 +65,15 @@ import {
 } from "./constants";
 import MSTeamsProvider from "./ms-teams-provider";
 import SlackProvider from "./slack-provider";
-import { errorMessage, isSlackDmChannel } from "./utils";
+import TelegramProvider from "./telegram-provider";
+import {
+  buildAgentFooter,
+  buildHistorySkippedAttachmentsNote,
+  buildSkippedAttachmentsNote,
+  errorMessage,
+  isLlmProviderAuthError,
+  isSlackDmChannel,
+} from "./utils";
 
 /**
  * ChatOps Manager - handles chatops provider lifecycle and message processing
@@ -63,6 +82,7 @@ import { errorMessage, isSlackDmChannel } from "./utils";
 export class ChatOpsManager {
   private msTeamsProvider: MSTeamsProvider | null = null;
   private slackProvider: SlackProvider | null = null;
+  private telegramProvider: TelegramProvider | null = null;
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private readonly a2aManager: A2AManager;
 
@@ -80,6 +100,10 @@ export class ChatOpsManager {
     return this.slackProvider;
   }
 
+  getTelegramProvider(): TelegramProvider | null {
+    return this.telegramProvider;
+  }
+
   getChatOpsProvider(
     providerType: ChatOpsProviderType,
   ): ChatOpsProvider | null {
@@ -88,6 +112,8 @@ export class ChatOpsManager {
         return this.getMSTeamsProvider();
       case "slack":
         return this.getSlackProvider();
+      case "telegram":
+        return this.getTelegramProvider();
     }
   }
 
@@ -146,7 +172,8 @@ export class ChatOpsManager {
   isAnyProviderConfigured(): boolean {
     return (
       (this.msTeamsProvider?.isConfigured() ?? false) ||
-      (this.slackProvider?.isConfigured() ?? false)
+      (this.slackProvider?.isConfigured() ?? false) ||
+      (this.telegramProvider?.isConfigured() ?? false)
     );
   }
 
@@ -232,7 +259,7 @@ export class ChatOpsManager {
 
     // Load configs from DB (the single source of truth)
     // Errors are caught individually so a single broken config doesn't prevent other providers from initializing
-    const [msTeamsConfig, slackConfig] = await Promise.all([
+    const [msTeamsConfig, slackConfig, telegramConfig] = await Promise.all([
       ChatOpsConfigModel.getMsTeamsConfig().catch((error) => {
         logger.error(
           { error: error instanceof Error ? error.message : String(error) },
@@ -244,6 +271,13 @@ export class ChatOpsManager {
         logger.error(
           { error: error instanceof Error ? error.message : String(error) },
           "[ChatOps] Failed to load Slack config, skipping",
+        );
+        return null;
+      }),
+      ChatOpsConfigModel.getTelegramConfig().catch((error) => {
+        logger.error(
+          { error: error instanceof Error ? error.message : String(error) },
+          "[ChatOps] Failed to load Telegram config, skipping",
         );
         return null;
       }),
@@ -260,6 +294,14 @@ export class ChatOpsManager {
       // access manager capabilities (e.g., getAccessibleChatopsAgents for slash commands)
       this.slackProvider.setEventHandler(this);
     }
+    // The Telegram integration is feature-flagged: without the master switch
+    // the provider never starts, even if the DB already holds a config.
+    if (telegramConfig && config.chatops.telegramEnabled) {
+      this.telegramProvider = new TelegramProvider(telegramConfig);
+      // Telegram delivers everything over long polling, so all events flow
+      // through the event handler (like Slack socket mode)
+      this.telegramProvider.setEventHandler(this);
+    }
 
     if (!this.isAnyProviderConfigured()) {
       return;
@@ -268,6 +310,7 @@ export class ChatOpsManager {
     const providers: { name: string; provider: ChatOpsProvider | null }[] = [
       { name: "MS Teams", provider: this.msTeamsProvider },
       { name: "Slack", provider: this.slackProvider },
+      { name: "Telegram", provider: this.telegramProvider },
     ];
 
     for (const { name, provider } of providers) {
@@ -320,6 +363,10 @@ export class ChatOpsManager {
       await this.slackProvider.cleanup();
       this.slackProvider = null;
     }
+    if (this.telegramProvider) {
+      await this.telegramProvider.cleanup();
+      this.telegramProvider = null;
+    }
     this.stopCleanupInterval();
   }
 
@@ -368,7 +415,9 @@ export class ChatOpsManager {
       logger.warn("[ChatOps] Could not resolve user email");
       await provider.sendReply({
         originalMessage: message,
-        text: "Could not verify your identity. Please ensure your profile has an email configured.",
+        text:
+          provider.identityVerificationFailureText?.() ??
+          "Could not verify your identity. Please ensure your profile has an email configured.",
       });
       return;
     }
@@ -550,7 +599,7 @@ export class ChatOpsManager {
     const organizationId = await getDefaultOrganizationId();
 
     // Create or update binding
-    const isDm = isSlackDmChannel(selection.channelId);
+    const isDm = selection.isDm ?? isSlackDmChannel(selection.channelId);
     const channelName = isDm
       ? `Direct Message - ${senderEmail}`
       : await provider.getChannelName(selection.channelId);
@@ -721,12 +770,7 @@ export class ChatOpsManager {
 
     // Build the full message with context — use cleanedMessageText so
     // the "AgentName >" prefix is stripped from what the LLM sees
-    const providerLabel =
-      provider.providerId === "slack"
-        ? "Slack"
-        : provider.providerId === "ms-teams"
-          ? "MS Teams"
-          : provider.providerId;
+    const providerLabel = CHATOPS_PROVIDER_LABELS[provider.providerId];
     const threadIdForPrefix = message.threadId ?? message.messageId;
     let systemPrefix = `(${providerLabel} conversation, thread id: ${threadIdForPrefix})`;
     if (provider.providerId === "slack") {
@@ -800,6 +844,13 @@ export class ChatOpsManager {
     if (contextMessages.length > 0) {
       fullMessage = `${systemPrefix}\n\nThe earlier messages in this thread are below — this is your shared history in this conversation, so you DO have access to it and remember it. Use it to answer follow-up questions and references to "earlier", "before", or "what I just asked".\n\nConversation so far:\n${contextMessages.join("\n")}\n\nUser: ${cleanedMessageText}`;
     }
+
+    // Tell the model about files that were attached but not delivered (e.g. too
+    // large), so it doesn't deny they exist. History drops get per-turn notes
+    // in fetchThreadHistory; this covers the current message.
+    fullMessage += buildSkippedAttachmentsNote(
+      message.skippedAttachments ?? [],
+    );
 
     // Merge history attachments with current message attachments
     const mergedAttachments = [
@@ -1125,21 +1176,37 @@ export class ChatOpsManager {
       const contextMessages = history.map((msg) => {
         const text = msg.isFromBot ? stripBotFooter(msg.text) : msg.text;
         const sender = msg.isFromBot ? "You (Archestra)" : msg.senderName;
+        // A file-only turn has no text; name its attachments so the turn is
+        // meaningful (the file arrives separately or gets a skip note below).
+        if (!text.trim() && msg.files?.length) {
+          const names = msg.files
+            .map((f) => (f.name ? `"${f.name}"` : "an unnamed file"))
+            .join(", ");
+          return `${sender}: [sent ${msg.files.length === 1 ? "an attachment" : "attachments"}: ${names}]`;
+        }
         return `${sender}: ${text}`;
       });
 
-      // Collect files from non-bot user messages in history
-      const historyFiles = history
-        .filter((msg) => !msg.isFromBot && msg.files && msg.files.length > 0)
-        .flatMap((msg) => msg.files ?? []);
+      // Collect files from non-bot user messages, remembering the turn each
+      // file came from so drops can be surfaced on that turn.
+      const fileRefs = history.flatMap((msg, turnIndex) =>
+        !msg.isFromBot && msg.files
+          ? msg.files.map((file) => ({ file, turnIndex }))
+          : [],
+      );
 
-      const historyAttachments: Array<{
-        contentType: string;
-        contentBase64: string;
-        name?: string;
-      }> = [];
+      const historyAttachments: A2AAttachment[] = [];
+      const skippedByTurn = new Map<number, SkippedAttachment[]>();
+      const addSkip = (turnIndex: number, skipped: SkippedAttachment): void => {
+        const existing = skippedByTurn.get(turnIndex);
+        if (existing) {
+          existing.push(skipped);
+        } else {
+          skippedByTurn.set(turnIndex, [skipped]);
+        }
+      };
 
-      if (historyFiles.length > 0) {
+      if (fileRefs.length > 0) {
         // Calculate how much budget the current message attachments already use
         const currentAttachmentSize =
           message.attachments?.reduce(
@@ -1150,29 +1217,51 @@ export class ChatOpsManager {
           CHATOPS_ATTACHMENT_LIMITS.MAX_TOTAL_ATTACHMENTS_SIZE -
           currentAttachmentSize;
 
-        if (remainingBudget > 0) {
-          // Limit files to download based on remaining budget
-          const filesToDownload = historyFiles.filter(
-            (f) =>
-              !f.size ||
-              f.size <= CHATOPS_ATTACHMENT_LIMITS.MAX_ATTACHMENT_SIZE,
-          );
-
+        if (remainingBudget <= 0) {
+          for (const { file, turnIndex } of fileRefs) {
+            addSkip(turnIndex, {
+              name: file.name,
+              sizeBytes: file.size,
+              reason: "total_limit_reached",
+            });
+          }
+        } else {
           try {
-            const downloaded = await provider.downloadFiles(filesToDownload);
-            // Trim to remaining budget
+            const outcomes = await provider.downloadFiles(
+              fileRefs.map((ref) => ref.file),
+            );
+            // Trim delivered files to the remaining budget; once it overflows,
+            // every later delivery is surfaced as skipped (mirrors the
+            // provider-side budget semantics).
             let totalSize = 0;
-            for (const attachment of downloaded) {
-              const size = Math.ceil((attachment.contentBase64.length * 3) / 4);
-              if (totalSize + size > remainingBudget) break;
+            let budgetExhausted = false;
+            outcomes.forEach((outcome, index) => {
+              const ref = fileRefs[index];
+              if (!ref) return;
+              if (outcome.status === "skipped") {
+                addSkip(ref.turnIndex, outcome.skipped);
+                return;
+              }
+              const size = Math.ceil(
+                (outcome.attachment.contentBase64.length * 3) / 4,
+              );
+              if (budgetExhausted || totalSize + size > remainingBudget) {
+                budgetExhausted = true;
+                addSkip(ref.turnIndex, {
+                  name: ref.file.name,
+                  sizeBytes: size,
+                  reason: "total_limit_reached",
+                });
+                return;
+              }
               totalSize += size;
-              historyAttachments.push(attachment);
-            }
+              historyAttachments.push(outcome.attachment);
+            });
             if (historyAttachments.length > 0) {
               logger.info(
                 {
                   downloadedCount: historyAttachments.length,
-                  totalHistoryFiles: historyFiles.length,
+                  totalHistoryFiles: fileRefs.length,
                 },
                 "[ChatOps] Downloaded attachments from thread history",
               );
@@ -1183,6 +1272,16 @@ export class ChatOpsManager {
               "[ChatOps] Failed to download history attachments",
             );
           }
+        }
+      }
+
+      // Surface drops on the turn they belong to, so "use the screenshot
+      // above" gets an explanation instead of a denial.
+      for (const [turnIndex, skips] of skippedByTurn) {
+        const line = contextMessages[turnIndex];
+        if (line !== undefined) {
+          contextMessages[turnIndex] =
+            line + buildHistorySkippedAttachmentsNote(skips);
         }
       }
 
@@ -1360,6 +1459,7 @@ export class ChatOpsManager {
   private async seedConfigFromEnvVars(): Promise<void> {
     await this.seedMsTeamsConfigFromEnvVars();
     await this.seedSlackConfigFromEnvVars();
+    await this.seedTelegramConfigFromEnvVars();
   }
 
   private async seedMsTeamsConfigFromEnvVars(): Promise<void> {
@@ -1432,6 +1532,30 @@ export class ChatOpsManager {
     }
   }
 
+  private async seedTelegramConfigFromEnvVars(): Promise<void> {
+    try {
+      // Don't store tokens for a feature-flagged-off integration
+      if (!config.chatops.telegramEnabled) return;
+
+      const existing = await ChatOpsConfigModel.getTelegramConfig();
+      if (existing) return;
+
+      const botToken = process.env.ARCHESTRA_CHATOPS_TELEGRAM_BOT_TOKEN || "";
+      if (!botToken) return;
+
+      await ChatOpsConfigModel.saveTelegramConfig({
+        enabled: true,
+        botToken,
+      });
+      logger.info("[ChatOps] Seeded Telegram config from env vars to DB");
+    } catch (error) {
+      logger.error(
+        { error: errorMessage(error) },
+        "[ChatOps] Failed to seed Telegram config from env vars",
+      );
+    }
+  }
+
   private async executeAndReply(params: {
     agent: { id: string; name: string };
     binding: { id: string; organizationId: string; agentId: string | null };
@@ -1472,14 +1596,36 @@ export class ChatOpsManager {
     }
 
     try {
-      const { result, responseAgent } = await this.executeMessage({
+      const executeParams = {
         agent,
         binding,
         message,
         provider,
         fullMessage,
         userId,
-      });
+      };
+      let execution: Awaited<ReturnType<ChatOpsManager["executeMessage"]>>;
+      try {
+        execution = await this.executeMessage(executeParams);
+      } catch (error) {
+        // Web chat surfaces transient provider failures as a retry button;
+        // chatops has no interactive affordance, so one automatic retry
+        // stands in for it. The retry re-runs the whole agent turn, exactly
+        // like a user-clicked retry would.
+        if (!isTransientProviderError(error)) {
+          throw error;
+        }
+        logger.info(
+          {
+            messageId: message.messageId,
+            agentId: agent.id,
+            errorCode: error.chatErrorResponse.code,
+          },
+          "[ChatOps] Retrying execution once after a transient provider error",
+        );
+        execution = await this.executeMessage(executeParams);
+      }
+      const { result, responseAgent } = execution;
 
       return await this.replyByMessageExecutionResult({
         agent: responseAgent,
@@ -1495,29 +1641,139 @@ export class ChatOpsManager {
       );
 
       if (sendReply) {
-        // A per-user provider the user hasn't linked yet → a friendly prompt
-        // with a link to connect (chatops can't render the interactive flow).
-        if (error instanceof LlmProviderAuthRequiredError) {
-          await provider.sendReply({
-            originalMessage: message,
-            text: `This agent uses ${error.providerLabel}, which is per-user. Connect your own ${error.providerLabel} account, then try again: ${config.frontendBaseUrl}/settings`,
-            conversationReference: message.metadata?.conversationReference,
-          });
-          return { success: false, error: errorMessage(error) };
-        }
-        const errMsg = errorMessage(error);
-        // Show truncated error details as a subtle footer (max 500 chars)
-        const errorDetail =
-          errMsg.length > 500 ? `${errMsg.slice(0, 500)}…` : errMsg;
-        await provider.sendReply({
-          originalMessage: message,
-          text: "Sorry, I encountered an error processing your request.",
-          footer: errorDetail,
-          conversationReference: message.metadata?.conversationReference,
+        await this.sendExecutionErrorReply({
+          provider,
+          message,
+          error,
+          agentName: agent.name,
+          llmContext: {
+            organizationId: binding.organizationId,
+            userId,
+            agentId: agent.id,
+          },
         });
       }
 
       return { success: false, error: errorMessage(error) };
+    }
+  }
+
+  /**
+   * Reply to a failed execution. Known error shapes get actionable replies;
+   * anything else falls back to the generic apology with the raw error as a
+   * subtle footer.
+   */
+  private async sendExecutionErrorReply(params: {
+    provider: ChatOpsProvider;
+    message: IncomingChatMessage;
+    error: unknown;
+    /** The responding agent's name, so error replies carry the same footer. */
+    agentName?: string;
+    /** When present, used to name the API key/model the failed run resolved to. */
+    llmContext?: { organizationId: string; userId: string; agentId: string };
+  }): Promise<void> {
+    const { provider, message, error, agentName, llmContext } = params;
+
+    // Every reply — success or failure — leads with the agent footer; error
+    // details, when present, trail after the agent name.
+    const footer = (extra?: string): string | undefined =>
+      agentName ? buildAgentFooter(agentName, extra) : extra;
+
+    // A per-user provider the user hasn't linked yet → a friendly prompt
+    // with a link to connect (chatops can't render the interactive flow).
+    if (error instanceof LlmProviderAuthRequiredError) {
+      await provider.sendReply({
+        originalMessage: message,
+        text: `This agent uses ${error.providerLabel}, which is per-user. Connect your own ${error.providerLabel} account, then try again: ${config.frontendBaseUrl}/settings`,
+        footer: footer(),
+        conversationReference: message.metadata?.conversationReference,
+      });
+      return;
+    }
+
+    const errMsg = errorMessage(error);
+    // Show truncated error details as a subtle footer (max 500 chars)
+    const errorDetail =
+      errMsg.length > 500 ? `${errMsg.slice(0, 500)}…` : errMsg;
+
+    // The LLM provider rejected the API key (e.g. Anthropic's "invalid
+    // x-api-key"). Users rarely realize the bot resolves its model/key the
+    // same way in-app chat does, so name the key that was used and where to
+    // fix it instead of leaving only the provider's cryptic one-liner.
+    if (isLlmProviderAuthError(errMsg)) {
+      const usedLlm = llmContext
+        ? await this.describeLlmUsedForRun(llmContext)
+        : null;
+      await provider.sendReply({
+        originalMessage: message,
+        text: [
+          "Sorry, I couldn't process your request — the LLM provider rejected the API key.",
+          "",
+          usedLlm ??
+            "Check the API key configured for this agent (or your organization's LLM settings).",
+          "",
+          `Update the key or configure a different one, then try again: ${config.frontendBaseUrl}/llm/model-providers`,
+        ].join("\n"),
+        footer: footer(errorDetail),
+        conversationReference: message.metadata?.conversationReference,
+      });
+      return;
+    }
+
+    await provider.sendReply({
+      originalMessage: message,
+      text: "Sorry, I encountered an error processing your request.",
+      footer: footer(errorDetail),
+      conversationReference: message.metadata?.conversationReference,
+    });
+  }
+
+  /**
+   * Best-effort description of the model/API key a chatops run resolved to,
+   * re-running the same deterministic resolution the execution used (agent's
+   * configured model/key → org default → best-available; the acting user's
+   * /chat default is deliberately excluded, matching the A2A executor). Returns
+   * null when anything fails — this runs on an error path and must never throw.
+   */
+  private async describeLlmUsedForRun(params: {
+    organizationId: string;
+    userId: string;
+    agentId: string;
+  }): Promise<string | null> {
+    try {
+      const agent = await AgentModel.findById(params.agentId);
+      if (!agent) return null;
+
+      const { selectedModel, selectedProvider } =
+        await resolveConversationLlmSelectionForAgent({
+          agent: { llmApiKeyId: agent.llmApiKeyId, modelId: agent.modelId },
+          organizationId: params.organizationId,
+          userId: params.userId,
+          includeMemberChatDefault: false,
+        });
+
+      const userTeamIds = await TeamModel.getUserTeamIds(params.userId);
+      const key = await LlmProviderApiKeyModel.getCurrentApiKey({
+        organizationId: params.organizationId,
+        userId: params.userId,
+        userTeamIds,
+        provider: selectedProvider,
+        conversationId: null,
+        agentLlmApiKeyId: agent.llmApiKeyId,
+      });
+
+      const providerLabel =
+        providerDisplayNames[selectedProvider] ?? selectedProvider;
+      const keyDescription = key
+        ? `the ${LLM_KEY_SCOPE_LABELS[key.scope]} ${providerLabel} API key "${key.name}"`
+        : `the ${providerLabel} API key from the server environment`;
+      return `This request used ${keyDescription} with model \`${selectedModel}\`.`;
+    } catch (error) {
+      logger.warn(
+        { error: errorMessage(error) },
+        "[ChatOps] Failed to describe the LLM selection for an error reply",
+      );
+      return null;
     }
   }
 
@@ -1571,7 +1827,7 @@ export class ChatOpsManager {
       await provider.sendReply({
         originalMessage: message,
         text: agentResponse,
-        footer: `🤖 ${agent.name}`,
+        footer: buildAgentFooter(agent.name),
         // Teach the off switch once per channel thread: sticky auto-reply only
         // applies in channels, so the hint rides the bot's first reply there.
         ...((await this.shouldHintThreadMute(provider, message)) && {
@@ -1676,7 +1932,7 @@ export class ChatOpsManager {
       await provider.sendReply({
         originalMessage: message,
         text: `Pending approval requests: ${unresolvedCount}`,
-        footer: `🤖 ${agent.name}`,
+        footer: buildAgentFooter(agent.name),
         conversationReference: message.metadata?.conversationReference,
       });
       return {
@@ -1696,7 +1952,7 @@ export class ChatOpsManager {
         text:
           agentResponse ||
           "Approval required before I can continue with this action.",
-        footer: `🤖 ${agent.name}`,
+        footer: buildAgentFooter(agent.name),
         conversationReference: message.metadata?.conversationReference,
       });
 
@@ -1756,7 +2012,7 @@ export class ChatOpsManager {
       ],
     });
     const source: InteractionSource =
-      provider.providerId === "slack" ? "chatops:slack" : "chatops:ms-teams";
+      CHATOPS_PROVIDER_SOURCES[provider.providerId];
     const systemParams = {
       sessionId,
       source,
@@ -1948,10 +2204,7 @@ export class ChatOpsManager {
             decision.channelId,
             originalMessage.threadId,
           ),
-          source:
-            provider.providerId === "slack"
-              ? "chatops:slack"
-              : "chatops:ms-teams",
+          source: CHATOPS_PROVIDER_SOURCES[provider.providerId],
         },
       });
 
@@ -1973,16 +2226,10 @@ export class ChatOpsManager {
         "[ChatOps] Failed to execute approval decision",
       );
 
-      const errMsg = errorMessage(error);
-      // Show truncated error details as a subtle footer (max 500 chars)
-      const errorDetail =
-        errMsg.length > 500 ? `${errMsg.slice(0, 500)}…` : errMsg;
-      await provider.sendReply({
-        originalMessage: decision.originalMessage,
-        text: "Sorry, I encountered an error processing your request.",
-        footer: errorDetail,
-        conversationReference:
-          decision.originalMessage.metadata?.conversationReference,
+      await this.sendExecutionErrorReply({
+        provider,
+        message: decision.originalMessage,
+        error,
       });
     }
   }
@@ -1994,6 +2241,13 @@ export const chatOpsManager = new ChatOpsManager();
 // Internal Helpers
 // =============================================================================
 
+/** User-facing label for an LLM provider API key's visibility scope. */
+const LLM_KEY_SCOPE_LABELS: Record<ResourceVisibilityScope, string> = {
+  personal: "personal",
+  team: "team",
+  org: "organization-wide",
+};
+
 async function getDefaultOrganizationId(): Promise<string> {
   const org = await OrganizationModel.getFirst();
   if (!org) {
@@ -2002,15 +2256,21 @@ async function getDefaultOrganizationId(): Promise<string> {
   return org.id;
 }
 
-/**
- * Strip `<thinking>...</thinking>` blocks from LLM responses.
- * These are internal reasoning blocks that should not be shown to users.
- *
- * Uses non-greedy matching (`*?`) so multiple separate thinking blocks are
- * stripped independently without eating content between them. This assumes
- * blocks are not nested — nested `<thinking>` tags would leave the tail
- * visible, but LLMs do not produce nested thinking blocks in practice.
- */
+/** Human-readable provider names for LLM context prefixes. */
+const CHATOPS_PROVIDER_LABELS: Record<ChatOpsProviderType, string> = {
+  slack: "Slack",
+  "ms-teams": "MS Teams",
+  telegram: "Telegram",
+};
+
+/** Interaction-log `source` value per provider. */
+const CHATOPS_PROVIDER_SOURCES: Record<ChatOpsProviderType, InteractionSource> =
+  {
+    slack: "chatops:slack",
+    "ms-teams": "chatops:ms-teams",
+    telegram: "chatops:telegram",
+  };
+
 /**
  * Build a deterministic session ID for chatops messages.
  * Uses the thread ID when available (threaded conversations), otherwise
@@ -2040,8 +2300,26 @@ export function buildChatOpsSessionId(
 // traceID (7+32) + spanID (6+16) = 61; remaining for sessionID key (9) + value = 58.
 const MAX_SESSION_ID_LENGTH = 58;
 
-function stripThinkingBlocks(text: string): string {
-  return text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim();
+/**
+ * Codes worth one immediate application-level retry: transient conditions
+ * where a second attempt plausibly succeeds right away. RateLimit is
+ * deliberately excluded even though it's retryable — the SDK already backed
+ * off within the failed attempt, so an immediate re-run would just re-hit the
+ * same window.
+ */
+const CHATOPS_AUTO_RETRYABLE_CODES = new Set<ChatErrorCode>([
+  ChatErrorCode.ServerError,
+  ChatErrorCode.NetworkError,
+  ChatErrorCode.EmptyResponse,
+  ChatErrorCode.IncompleteToolCall,
+]);
+
+function isTransientProviderError(error: unknown): error is ProviderError {
+  return (
+    error instanceof ProviderError &&
+    error.chatErrorResponse.isRetryable &&
+    CHATOPS_AUTO_RETRYABLE_CODES.has(error.chatErrorResponse.code)
+  );
 }
 
 /**

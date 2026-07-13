@@ -9,8 +9,8 @@ import db, { schema } from "@/database";
 import { OrganizationModel } from "@/models";
 import { beforeEach, describe, expect, test } from "@/test";
 import type { Agent, InsertMemory } from "@/types";
-import { MAX_CORE_ITEMS_PER_SCOPE } from "./memory";
 import { type ArchestraContext, executeArchestraTool } from ".";
+import { MAX_CORE_ITEMS_PER_SCOPE } from "./memory";
 
 const t = (name: string) =>
   `${ARCHESTRA_MCP_SERVER_NAME}${MCP_SERVER_TOOL_NAME_SEPARATOR}${name}`;

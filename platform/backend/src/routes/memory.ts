@@ -21,11 +21,11 @@ import {
   DeleteObjectResponseSchema,
   type Memory,
   MemoryAccessLevelSchema,
+  MemoryListItemSchema,
   type MemoryTier,
   MemoryTierSchema,
   type MemoryVisibility,
   MemoryVisibilitySchema,
-  MemoryListItemSchema,
   SelectMemorySchema,
 } from "@/types";
 import { isUniqueConstraintError } from "@/utils/db";

@@ -7,7 +7,6 @@ import {
   getArchestraToolShortName,
 } from "@archestra/shared";
 import { getArchestraMcpTools } from "@/archestra-mcp-server";
-import { toolShortNames as knowledgeManagementToolShortNames } from "@/archestra-mcp-server/knowledge-management";
 import { TOOL_PERMISSIONS } from "@/archestra-mcp-server/rbac";
 import logger from "@/logging";
 
@@ -24,6 +23,7 @@ enum ToolGroup {
   LLMProxies = "LLM Proxies",
   MCPGateways = "MCP Gateways",
   MCPServers = "MCP Servers",
+  Teams = "Teams",
   Limits = "Limits",
   Policies = "Policies",
   ToolAssignment = "Tool Assignment",
@@ -43,17 +43,18 @@ const groupOrder: Record<ToolGroup, number> = {
   [ToolGroup.LLMProxies]: 2,
   [ToolGroup.MCPGateways]: 3,
   [ToolGroup.MCPServers]: 4,
-  [ToolGroup.Limits]: 5,
-  [ToolGroup.Policies]: 6,
-  [ToolGroup.ToolAssignment]: 7,
-  [ToolGroup.KnowledgeManagement]: 8,
-  [ToolGroup.Chat]: 9,
-  [ToolGroup.Meta]: 10,
-  [ToolGroup.CodeExecution]: 11,
-  [ToolGroup.Skills]: 12,
-  [ToolGroup.SkillSandbox]: 13,
-  [ToolGroup.Apps]: 14,
-  [ToolGroup.Memory]: 15,
+  [ToolGroup.Teams]: 5,
+  [ToolGroup.Limits]: 6,
+  [ToolGroup.Policies]: 7,
+  [ToolGroup.ToolAssignment]: 8,
+  [ToolGroup.KnowledgeManagement]: 9,
+  [ToolGroup.Chat]: 10,
+  [ToolGroup.Meta]: 11,
+  [ToolGroup.CodeExecution]: 12,
+  [ToolGroup.Skills]: 13,
+  [ToolGroup.SkillSandbox]: 14,
+  [ToolGroup.Apps]: 15,
+  [ToolGroup.Memory]: 16,
 };
 
 /**
@@ -86,7 +87,18 @@ const toolGroups: Record<ArchestraToolShortName, ToolGroup> = {
   deploy_mcp_server: ToolGroup.MCPServers,
   list_mcp_server_deployments: ToolGroup.MCPServers,
   get_mcp_server_logs: ToolGroup.MCPServers,
+  reload_mcp_server_tools: ToolGroup.MCPServers,
   create_mcp_server_installation_request: ToolGroup.MCPServers,
+
+  create_team: ToolGroup.Teams,
+  get_team: ToolGroup.Teams,
+  list_teams: ToolGroup.Teams,
+  edit_team: ToolGroup.Teams,
+  delete_team: ToolGroup.Teams,
+  list_team_members: ToolGroup.Teams,
+  add_team_member: ToolGroup.Teams,
+  update_team_member_role: ToolGroup.Teams,
+  remove_team_member: ToolGroup.Teams,
 
   create_limit: ToolGroup.Limits,
   get_limits: ToolGroup.Limits,
@@ -108,6 +120,7 @@ const toolGroups: Record<ArchestraToolShortName, ToolGroup> = {
   delete_trusted_data_policy: ToolGroup.Policies,
 
   bulk_assign_tools_to_agents: ToolGroup.ToolAssignment,
+  bulk_remove_tools_from_agents: ToolGroup.ToolAssignment,
   bulk_assign_tools_to_mcp_gateways: ToolGroup.ToolAssignment,
 
   query_knowledge_sources: ToolGroup.KnowledgeManagement,
@@ -130,7 +143,6 @@ const toolGroups: Record<ArchestraToolShortName, ToolGroup> = {
   unassign_knowledge_connector_from_agent: ToolGroup.KnowledgeManagement,
 
   todo_write: ToolGroup.Chat,
-  artifact_write: ToolGroup.Chat,
   swap_agent: ToolGroup.Chat,
   swap_to_default_agent: ToolGroup.Chat,
   create_project_from_conversation: ToolGroup.Chat,
@@ -142,6 +154,7 @@ const toolGroups: Record<ArchestraToolShortName, ToolGroup> = {
   load_skill: ToolGroup.Skills,
   create_skill: ToolGroup.Skills,
   update_skill: ToolGroup.Skills,
+  edit_skill: ToolGroup.Skills,
 
   run_command: ToolGroup.SkillSandbox,
   download_file: ToolGroup.SkillSandbox,
@@ -170,6 +183,33 @@ const toolGroups: Record<ArchestraToolShortName, ToolGroup> = {
   app_data_delete: ToolGroup.Apps,
   llm_complete: ToolGroup.Apps,
   memory: ToolGroup.Memory,
+};
+
+/**
+ * Extra access requirements for tools whose real authorization is finer-grained
+ * than the coarse RBAC permission in `TOOL_PERMISSIONS` — for example a team
+ * tool that gates on `team:read` but then enforces a team-member-role check in
+ * its handler. Rendered in the docs beside the RBAC permission so these
+ * handler-level rules are not silently lost. Keyed by tool short name; a tool
+ * with no entry has no requirement beyond its RBAC permission.
+ */
+const toolAccessNotes: Partial<Record<ArchestraToolShortName, string>> = {
+  // Membership mutations gate on `team:read`, then require the caller to be an
+  // organization-level team manager (holds `team:create`) OR an admin
+  // (team-member role) of the target team.
+  add_team_member:
+    "Beyond `team:read`, the caller must be an organization-level team manager (a role granting `team:create`) or an **admin** of the target team.",
+  update_team_member_role:
+    "Beyond `team:read`, the caller must be an organization-level team manager (a role granting `team:create`) or an **admin** of the target team.",
+  remove_team_member:
+    "Beyond `team:read`, the caller must be an organization-level team manager (a role granting `team:create`) or an **admin** of the target team.",
+  // Reads are scoped: non-managers only see teams they belong to.
+  get_team:
+    "Callers without organization-level team management (`team:create`) can only read teams they are a member of.",
+  list_team_members:
+    "Callers without organization-level team management (`team:create`) can only read members of teams they are a member of.",
+  list_teams:
+    "Callers without organization-level team management (`team:create`) only see teams they are a member of.",
 };
 
 // === Script entry point ===
@@ -230,11 +270,8 @@ function generateMarkdownBody(): string {
     (name) => getArchestraToolShortName(name) ?? name,
   );
 
-  // Knowledge tools are conditionally assigned (only when knowledge sources are attached)
-  const knowledgeToolSet = new Set<string>(knowledgeManagementToolShortNames);
   const preInstalledShortNames = allPreInstalledShortNames.filter(
-    (n): n is ArchestraToolShortName =>
-      isArchestraToolShortName(n) && !knowledgeToolSet.has(n),
+    (n): n is ArchestraToolShortName => isArchestraToolShortName(n),
   );
 
   // Group tools
@@ -244,6 +281,7 @@ function generateMarkdownBody(): string {
       shortName: ArchestraToolShortName;
       description: string;
       requiredPermission: ToolPermissionDisplay;
+      accessNote?: string;
       inputSchema: JsonSchema;
       outputSchema?: JsonSchema;
     }[]
@@ -268,6 +306,7 @@ function generateMarkdownBody(): string {
       shortName: typedShortName,
       description: truncateDescription(tool.description ?? ""),
       requiredPermission: formatToolPermission(typedShortName),
+      accessNote: toolAccessNotes[typedShortName],
       inputSchema: tool.inputSchema as JsonSchema,
       outputSchema: tool.outputSchema as JsonSchema | undefined,
     });
@@ -286,7 +325,17 @@ function generateMarkdownBody(): string {
     section += "|------|-------------|--------------------------|\n";
 
     for (const tool of groupTools) {
-      section += `| \`${tool.shortName}\` | ${escapeTableCell(tool.description)} | ${escapeTableCell(tool.requiredPermission)} |\n`;
+      // A trailing dagger flags tools whose real requirement is finer than the
+      // RBAC permission; the full note lives in the tool's detail section.
+      const permissionCell = tool.accessNote
+        ? `${tool.requiredPermission} †`
+        : tool.requiredPermission;
+      section += `| \`${tool.shortName}\` | ${escapeTableCell(tool.description)} | ${escapeTableCell(permissionCell)} |\n`;
+    }
+
+    if (groupTools.some((tool) => tool.accessNote)) {
+      section +=
+        "\n† This tool enforces an additional access requirement beyond its RBAC permission — see its details below.\n";
     }
 
     // Add detailed input schemas for each tool in this group
@@ -296,6 +345,7 @@ function generateMarkdownBody(): string {
         tool.requiredPermission,
         tool.inputSchema,
         tool.outputSchema,
+        tool.accessNote,
       );
       if (schemaMarkdown) {
         section += `\n${schemaMarkdown}`;
@@ -316,21 +366,28 @@ function generateMarkdownBody(): string {
 <!--
 This file is auto-generated by \`pnpm codegen:archestra-mcp-server-docs\`.
 Do not edit manually.
+Renaming/deleting this page? Add a redirect in docs/redirects.json.
 -->
 
 The Archestra MCP Server is a built-in MCP server that ships with the platform and requires no installation. It exposes tools for managing platform resources such as agents, MCP servers, policies, and limits.
 
 Most tools require explicit assignment to Agents or MCP Gateways before they can be used. The following tools are pre-installed on all new agents by default: ${preInstalledList}.
 
-Additionally, ${formatToolLink("query_knowledge_sources")} is automatically assigned to Agents and MCP Gateways that have at least one [knowledge base](/platform-knowledge-bases) or [knowledge connector](/platform-knowledge-connectors) attached. To use it, the user must have ${queryKnowledgeSourcesPermission}.
+${formatToolLink("query_knowledge_sources")} appears for Agents and MCP Gateways only when at least one [knowledge base or connector](/docs/platform-knowledge) is attached. To use it, the user must have ${queryKnowledgeSourcesPermission}.
 
-All Archestra tools are prefixed with \`archestra__\` and are always trusted — they bypass tool invocation and trusted data policies.
+All Archestra tools are prefixed with \`archestra__\`. Most built-in tools are always trusted — they bypass tool invocation and trusted data policies.
+
+${formatToolLink("query_knowledge_sources")} is an exception: its output is treated as sensitive by default and is evaluated by trusted data policies. See [AI Tool Guardrails](/docs/platform-ai-tool-guardrails) for more details.
 
 ## Auth
 
-Archestra tools are **trusted**, meaning they bypass [tool invocation policies](/platform-tool-invocation-policies) and [trusted data policies](/platform-trusted-data-policies) — the tool will always execute without policy evaluation.
+Archestra tools are **trusted** by default, meaning they bypass [tool invocation and trusted data policies](/docs/platform-ai-tool-guardrails) — the tool will always execute without policy evaluation.
+
+${formatToolLink("query_knowledge_sources")} is evaluated by trusted data policies and its results are treated as sensitive by default.
 
 However, **RBAC (role-based access control) is still enforced**. Every tool is mapped to a required permission (resource + action). The \`tools/list\` endpoint dynamically filters tools so users only see tools they have permission to use. For example, a user without \`knowledgeSource:create\` permission will not see ${formatToolLink("create_knowledge_base")} in their tool list and cannot execute it.
+
+Some tools enforce an **additional access requirement** in their handler beyond this RBAC permission — for example, the team membership tools gate on \`team:read\` but then require the caller to be an organization-level team manager or an admin (team-member role) of the specific team. These tools are marked with a † in the tables below, and the requirement is spelled out in each tool's details.
 
 ## Tools Reference
 
@@ -427,9 +484,13 @@ function renderToolSchemas(
   requiredPermission: ToolPermissionDisplay,
   inputSchema: JsonSchema,
   outputSchema?: JsonSchema,
+  accessNote?: string,
 ): string | null {
   let md = `#### ${toolName}\n\n`;
   md += `Required RBAC permission: ${requiredPermission}\n\n`;
+  if (accessNote) {
+    md += `Additional access requirement: ${accessNote}\n\n`;
+  }
 
   const inputRows = renderSchemaRows(inputSchema);
   if (inputRows.length === 0) {

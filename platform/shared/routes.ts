@@ -12,6 +12,8 @@ export const RouteId = {
   RestoreAgent: "restoreAgent",
   ExportAgent: "exportAgent",
   ImportAgent: "importAgent",
+  GetAgentToolExclusions: "getAgentToolExclusions",
+  UpdateAgentToolExclusions: "updateAgentToolExclusions",
   GetLabelKeys: "getLabelKeys",
   GetLabelValues: "getLabelValues",
 
@@ -80,6 +82,7 @@ export const RouteId = {
   DeleteMcpServer: "deleteMcpServer",
   ReauthenticateMcpServer: "reauthenticateMcpServer",
   ReinstallMcpServer: "reinstallMcpServer",
+  ReloadMcpServerTools: "reloadMcpServerTools",
   GetMcpServerInstallationStatus: "getMcpServerInstallationStatus",
   // MCP Gateway Routes
   McpGatewayGet: "mcpGatewayGet",
@@ -138,6 +141,7 @@ export const RouteId = {
   DeleteRole: "deleteRole",
 
   // Tool Routes
+  GetTool: "getTool",
   GetTools: "getTools",
   GetToolsWithAssignments: "getToolsWithAssignments",
   GetUnassignedTools: "getUnassignedTools",
@@ -193,6 +197,10 @@ export const RouteId = {
     "modelRouterEmbeddingsWithDefaultAgent",
   ModelRouterEmbeddingsWithAgent: "modelRouterEmbeddingsWithAgent",
 
+  // Proxy Routes - Gemini
+  GeminiEmbeddingsWithDefaultAgent: "geminiEmbeddingsWithDefaultAgent",
+  GeminiEmbeddingsWithAgent: "geminiEmbeddingsWithAgent",
+
   // Proxy Routes - Anthropic
   AnthropicMessagesWithDefaultAgent: "anthropicMessagesWithDefaultAgent",
   AnthropicMessagesWithAgent: "anthropicMessagesWithAgent",
@@ -211,6 +219,8 @@ export const RouteId = {
   MistralChatCompletionsWithDefaultAgent:
     "mistralChatCompletionsWithDefaultAgent",
   MistralChatCompletionsWithAgent: "mistralChatCompletionsWithAgent",
+  MistralEmbeddingsWithDefaultAgent: "mistralEmbeddingsWithDefaultAgent",
+  MistralEmbeddingsWithAgent: "mistralEmbeddingsWithAgent",
 
   // Proxy Routes - Perplexity
   PerplexityChatCompletionsWithDefaultAgent:
@@ -233,15 +243,21 @@ export const RouteId = {
   // Proxy Routes - vLLM
   VllmChatCompletionsWithDefaultAgent: "vllmChatCompletionsWithDefaultAgent",
   VllmChatCompletionsWithAgent: "vllmChatCompletionsWithAgent",
+  VllmEmbeddingsWithDefaultAgent: "vllmEmbeddingsWithDefaultAgent",
+  VllmEmbeddingsWithAgent: "vllmEmbeddingsWithAgent",
 
   // Proxy Routes - Ollama
   OllamaChatCompletionsWithDefaultAgent:
     "ollamaChatCompletionsWithDefaultAgent",
   OllamaChatCompletionsWithAgent: "ollamaChatCompletionsWithAgent",
+  OllamaEmbeddingsWithDefaultAgent: "ollamaEmbeddingsWithDefaultAgent",
+  OllamaEmbeddingsWithAgent: "ollamaEmbeddingsWithAgent",
   // Proxy Routes - Zhipu AI
   ZhipuaiChatCompletionsWithDefaultAgent:
     "zhipuaiChatCompletionsWithDefaultAgent",
   ZhipuaiChatCompletionsWithAgent: "zhipuaiChatCompletionsWithAgent",
+  ZhipuaiEmbeddingsWithDefaultAgent: "zhipuaiEmbeddingsWithDefaultAgent",
+  ZhipuaiEmbeddingsWithAgent: "zhipuaiEmbeddingsWithAgent",
 
   // Proxy Routes - DeepSeek
   DeepSeekChatCompletionsWithDefaultAgent:
@@ -285,11 +301,27 @@ export const RouteId = {
   GithubCopilotDeviceAuthStart: "githubCopilotDeviceAuthStart",
   GithubCopilotDeviceAuthPoll: "githubCopilotDeviceAuthPoll",
 
+  // Proxy Routes - Microsoft 365 Copilot
+  Microsoft365CopilotChatCompletionsWithDefaultAgent:
+    "microsoft365CopilotChatCompletionsWithDefaultAgent",
+  Microsoft365CopilotChatCompletionsWithAgent:
+    "microsoft365CopilotChatCompletionsWithAgent",
+  Microsoft365CopilotListModelsWithDefaultAgent:
+    "microsoft365CopilotListModelsWithDefaultAgent",
+  Microsoft365CopilotListModelsWithAgent:
+    "microsoft365CopilotListModelsWithAgent",
+
+  // Microsoft 365 Copilot device-flow sign-in (creates personal provider keys)
+  Microsoft365CopilotDeviceAuthStart: "microsoft365CopilotDeviceAuthStart",
+  Microsoft365CopilotDeviceAuthPoll: "microsoft365CopilotDeviceAuthPoll",
+
   // Proxy Routes - Azure AI Foundry
   AzureChatCompletionsWithDefaultAgent: "azureChatCompletionsWithDefaultAgent",
   AzureChatCompletionsWithAgent: "azureChatCompletionsWithAgent",
   AzureResponsesWithDefaultAgent: "azureResponsesWithDefaultAgent",
   AzureResponsesWithAgent: "azureResponsesWithAgent",
+  AzureEmbeddingsWithDefaultAgent: "azureEmbeddingsWithDefaultAgent",
+  AzureEmbeddingsWithAgent: "azureEmbeddingsWithAgent",
 
   // Chat Routes
   StreamChat: "streamChat",
@@ -311,6 +343,7 @@ export const RouteId = {
   GenerateChatConversationTitle: "generateChatConversationTitle",
   GetChatMcpTools: "getChatMcpTools",
   UpdateChatMessage: "updateChatMessage",
+  SetChatMessageFeedback: "setChatMessageFeedback",
   GetConversationEnabledTools: "getConversationEnabledTools",
   UpdateConversationEnabledTools: "updateConversationEnabledTools",
   DeleteConversationEnabledTools: "deleteConversationEnabledTools",
@@ -384,6 +417,13 @@ export const RouteId = {
   CreateDefaultUserLimit: "createDefaultUserLimit",
   UpdateDefaultUserLimit: "updateDefaultUserLimit",
   DeleteDefaultUserLimit: "deleteDefaultUserLimit",
+
+  // Onboarding Routes
+  GetOnboardingSeenNavItems: "getOnboardingSeenNavItems",
+  MarkOnboardingNavItemsSeen: "markOnboardingNavItemsSeen",
+  GetOnboardingSurveyEligibility: "getOnboardingSurveyEligibility",
+  SubmitOnboardingSurvey: "submitOnboardingSurvey",
+  GetFeedbackPopupActivation: "getFeedbackPopupActivation",
 
   // Organization Routes
   GetOrganization: "getOrganization",
@@ -501,6 +541,9 @@ export const RouteId = {
   CreateChatOpsDmBinding: "createChatOpsDmBinding",
   UpdateChatOpsConfigInQuickstart: "updateChatOpsConfigInQuickstart",
   UpdateSlackChatOpsConfig: "updateSlackChatOpsConfig",
+  UpdateTelegramChatOpsConfig: "updateTelegramChatOpsConfig",
+  LinkTelegramChatOpsAccount: "linkTelegramChatOpsAccount",
+  GenerateTelegramLinkCode: "generateTelegramLinkCode",
   ConnectNgrok: "connectNgrok",
   DisconnectNgrok: "disconnectNgrok",
   GetNgrokConfig: "getNgrokConfig",
@@ -618,6 +661,10 @@ export const RouteId = {
   GetAppTemplates: "getAppTemplates",
   OpenAppInChat: "openAppInChat",
   OpenExternalAppInChat: "openExternalAppInChat",
+  PinApp: "pinApp",
+  UnpinApp: "unpinApp",
+  PinExternalApp: "pinExternalApp",
+  UnpinExternalApp: "unpinExternalApp",
   PostAppRenderDiagnostics: "postAppRenderDiagnostics",
   PostAppRenderScreenshot: "postAppRenderScreenshot",
   // Frontend session-based proxy to the app-bound MCP server (chat + standalone)
